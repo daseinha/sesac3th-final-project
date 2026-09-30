@@ -10,6 +10,9 @@ import os
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_openai import OpenAIEmbeddings
+from pydantic import BaseModel
+
+from src.usage import record_usage
 
 _LLM_MODEL = os.environ.get("LLM_MODEL", "gpt-4.1-mini")
 _EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
@@ -36,3 +39,49 @@ def get_embeddings_model() -> OpenAIEmbeddings:
     if _embeddings_model is None:
         _embeddings_model = OpenAIEmbeddings(model=_EMBEDDING_MODEL)
     return _embeddings_model
+
+
+def embed_text(text: str, purpose: str) -> list[float]:
+    """임베딩 생성 + 토큰 사용량 기록.
+
+    langchain의 embed_query()는 사용량 정보를 안 돌려줘서, 밑에 있는 openai
+    클라이언트를 직접 호출해 임베딩 벡터와 usage를 한 번에 받는다.
+    """
+    model = get_embeddings_model()
+    response = model.client.create(input=[text], model=_EMBEDDING_MODEL)
+    record_usage(
+        call_type="embedding",
+        model=_EMBEDDING_MODEL,
+        input_tokens=response.usage.prompt_tokens,
+        purpose=purpose,
+    )
+    return response.data[0].embedding
+
+
+def invoke_chat(messages: list[dict], purpose: str):
+    """일반 채팅 호출(구조화 출력 아님) + 토큰 사용량 기록. AIMessage를 반환."""
+    response = get_chat_model().invoke(messages)
+    usage = response.usage_metadata or {}
+    record_usage(
+        call_type="chat",
+        model=_LLM_MODEL,
+        input_tokens=usage.get("input_tokens", 0),
+        output_tokens=usage.get("output_tokens", 0),
+        purpose=purpose,
+    )
+    return response
+
+
+def invoke_structured(schema: type[BaseModel], messages: list[dict], purpose: str) -> BaseModel:
+    """구조화 출력 호출 + 토큰 사용량 기록. 파싱된 스키마 객체를 반환."""
+    structured_model = get_chat_model().with_structured_output(schema, include_raw=True)
+    result = structured_model.invoke(messages)
+    usage = result["raw"].usage_metadata or {}
+    record_usage(
+        call_type="chat",
+        model=_LLM_MODEL,
+        input_tokens=usage.get("input_tokens", 0),
+        output_tokens=usage.get("output_tokens", 0),
+        purpose=purpose,
+    )
+    return result["parsed"]

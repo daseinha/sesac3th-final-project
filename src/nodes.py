@@ -7,7 +7,7 @@ tier2_deep_agent, store_only는 아직 스텁 -- 각 함수의 TODO 참고.
 from pydantic import BaseModel, Field
 
 from src.db import insert_note_chunk, search_similar_chunks, search_top_similarity
-from src.llm import get_chat_model, get_embeddings_model
+from src.llm import embed_text, invoke_chat, invoke_structured
 from src.routers import compute_routing_decision
 from src.state import NoteAssessment, NoteMateState
 
@@ -48,17 +48,18 @@ def assess_note(state: NoteMateState) -> dict:
     """
     content = state["content"]
 
-    embedding = get_embeddings_model().embed_query(content)
+    embedding = embed_text(content, purpose="assess_note_embedding")
 
     raw_top_score = search_top_similarity(embedding, course_id=state.get("course_id"))
     top_score = raw_top_score if raw_top_score is not None else 0.0
 
-    structured_model = get_chat_model().with_structured_output(_NoteAssessmentSchema)
-    result: _NoteAssessmentSchema = structured_model.invoke(
+    result: _NoteAssessmentSchema = invoke_structured(
+        _NoteAssessmentSchema,
         [
             {"role": "system", "content": _ASSESSMENT_SYSTEM_PROMPT},
             {"role": "user", "content": content},
-        ]
+        ],
+        purpose="assess_note_assessment",
     )
     assessment: NoteAssessment = {
         "is_question": result.is_question,
@@ -82,7 +83,7 @@ def embed_and_store(state: NoteMateState) -> dict:
     힌트인지 불분명). Tier1/2 전체를 건너뛰고 여기서 바로 persist_note로 간다 --
     LLM 호출을 아끼고, 판단 로그 통계에 필기가 아닌 자료가 섞이는 것도 방지.
     """
-    embedding = get_embeddings_model().embed_query(state["content"])
+    embedding = embed_text(state["content"], purpose="reference_embedding")
     return {"embedding": embedding}
 
 
@@ -140,11 +141,12 @@ def tier2_deep_agent(state: NoteMateState) -> dict:
         f"참고할 이전 필기 (유사도 순):\n{context}"
     )
 
-    response = get_chat_model().invoke(
+    response = invoke_chat(
         [
             {"role": "system", "content": _TIER2_SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
-        ]
+        ],
+        purpose="tier2_hint",
     )
     return {"tier2_result": response.content}
 
