@@ -222,6 +222,6 @@ __marimo__/
 # note-mate test/dev material -- real personal notes + course material,
 # not meant to be committed (privacy + possible copyright). Folder structure
 # itself is kept via .gitkeep.
-data/*
-!data/*/
-!data/*/.gitkeep
+data/**
+!data/**/
+!data/**/.gitkeep

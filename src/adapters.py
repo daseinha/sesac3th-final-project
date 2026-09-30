@@ -3,8 +3,13 @@
 txt(개인 필기) + Docling 기반 문서 어댑터(PDF/노션 내보내기 등 수업자료) 둘 다 있음.
 """
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
+
+# 파일명 앞 8자리 숫자를 그날 날짜로 인식 (예: "20260702 (목) 4회차 수업일지.txt")
+_FILENAME_DATE_RE = re.compile(r"^(\d{8})")
 
 
 @dataclass
@@ -17,46 +22,27 @@ class NoteInput:
 
 
 def parse_txt_notes(path: str) -> list[NoteInput]:
-    """빈 줄로 구분된 txt 필기 파일을 파싱한다.
+    """하루 단위 필기 일지(txt)를 파싱한다.
 
-    파일 형식 (한 문단 = 필기 한 조각):
-        [YYYY-MM-DD HH:MM]   <- 선택. 없으면 timestamp=None
-        필기 내용 (여러 줄 가능)
+    실제 사용자 파일 형식(2026-09-30 확인): 파일 하나 = 하루치 필기 전체.
+    파일 안에는 타임스탬프가 따로 없고, 파일명 앞 8자리 숫자(YYYYMMDD)가 그날
+    날짜다. 그 하루 동안 쓴 필기가 쭉 이어지며, 빈 줄로 대략적인 단락(주제)이
+    나뉜다.
 
-        (빈 줄로 다음 조각과 구분)
-
-    실제 사용자 필기 파일의 정확한 형식은 아직 안 봐서 [잠정]으로 정한 규칙이다 --
-    실제 파일을 보면 이 파서를 맞춰서 고쳐야 할 수 있음.
+    ([잠정] 이전 버전은 "조각마다 [YYYY-MM-DD HH:MM] 인라인 표시"를 가정했는데,
+    실제 파일과 달라서 이 버전으로 교체함 -- CLAUDE.md 변경 이력 참고. 파일명에
+    날짜가 없으면 timestamp=None으로 남긴다.)
     """
+    match = _FILENAME_DATE_RE.match(Path(path).stem)
+    file_date = datetime.strptime(match.group(1), "%Y%m%d") if match else None
+
     text = open(path, encoding="utf-8").read()
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
 
-    notes: list[NoteInput] = []
-    for i, paragraph in enumerate(paragraphs):
-        lines = paragraph.splitlines()
-        timestamp = None
-        content_lines = lines
-
-        first_line = lines[0].strip()
-        if first_line.startswith("[") and first_line.endswith("]"):
-            try:
-                timestamp = datetime.strptime(first_line[1:-1], "%Y-%m-%d %H:%M")
-                content_lines = lines[1:]
-            except ValueError:
-                pass  # 타임스탬프 형식이 아니면 그냥 본문의 일부로 취급
-
-        content = "\n".join(content_lines).strip()
-        if not content:
-            continue
-
-        notes.append(
-            NoteInput(
-                content=content,
-                timestamp=timestamp,
-                origin_ref=f"{path}:{i}",
-            )
-        )
-    return notes
+    return [
+        NoteInput(content=paragraph, timestamp=file_date, origin_ref=f"{path}:{i}")
+        for i, paragraph in enumerate(paragraphs)
+    ]
 
 
 def parse_document_notes(path: str) -> list[NoteInput]:

@@ -54,9 +54,12 @@ def ingest_data_folder(
                 for r in results:
                     if r.get("routing_decision"):  # personal만 값이 있음
                         log.write(
+                            f"  content={r.get('content')!r}\n"
                             f"  top_score={r.get('top_score'):.4f}, "
                             f"routing_decision={r.get('routing_decision')}\n"
                         )
+                        if r.get("tier2_result"):
+                            log.write(f"  tier2_result={r.get('tier2_result')!r}\n")
             log.write("\n")
 
     print(f"완료. 로그: {log_path}")
