@@ -11,6 +11,14 @@ from pathlib import Path
 # 파일명 앞 8자리 숫자를 그날 날짜로 인식 (예: "20260702 (목) 4회차 수업일지.txt")
 _FILENAME_DATE_RE = re.compile(r"^(\d{8})")
 
+# 한글/영문/숫자가 이 정도는 있어야 "내용 있는 청크"로 취급. 구분선(------)만
+# 있거나 텅 빈 문단은 걸러낸다 -- 실제 필기 파일에서 파일마다 반복 확인된 노이즈.
+_SUBSTANTIAL_CONTENT_RE = re.compile(r"[가-힣a-zA-Z0-9]{3,}")
+
+
+def _has_substantial_content(text: str) -> bool:
+    return bool(_SUBSTANTIAL_CONTENT_RE.search(text))
+
 
 @dataclass
 class NoteInput:
@@ -37,7 +45,11 @@ def parse_txt_notes(path: str) -> list[NoteInput]:
     file_date = datetime.strptime(match.group(1), "%Y%m%d") if match else None
 
     text = open(path, encoding="utf-8").read()
-    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    paragraphs = [
+        p.strip()
+        for p in text.split("\n\n")
+        if p.strip() and _has_substantial_content(p)
+    ]
 
     return [
         NoteInput(content=paragraph, timestamp=file_date, origin_ref=f"{path}:{i}")
