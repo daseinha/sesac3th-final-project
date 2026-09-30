@@ -3,11 +3,17 @@
 CLAUDE.md "백엔드 검증 방식" 섹션에서 정의한 그대로: ingest_note()가 필기
 입력의 유일한 진입점이다. 재생 스크립트, (나중에) 프론트엔드 모두 이 함수를
 통해서만 필기를 넣는다 -- 임시 테스트 코드가 아니라 실제 서비스 API.
+
+ingest_file()은 그 위에 한 단계 더 얹은 "업로드 진입점" -- 사용자/프론트엔드
+입장에서 txt든 PDF든 같은 함수 하나만 부르면 되고, 확장자 보고 알맞은
+어댑터를 자동으로 골라 ingest_note()로 넘기는 역할만 한다.
 """
 
 from datetime import datetime
+from pathlib import Path
 from typing import Literal
 
+from src.adapters import parse_document_notes, parse_txt_notes
 from src.app import graph
 from src.state import NoteMateState
 
@@ -43,3 +49,45 @@ def ingest_note(
         "origin_ref": origin_ref,
     }
     return graph.invoke(initial_state)
+
+
+# 확장자 -> (어댑터 함수, medium 값). 새 형식을 지원하려면 여기에 한 줄만 추가하면 됨.
+# .html/.md는 노션 내보내기라고 가정([잠정] -- 실제 노션 내보내기 파일 보면 재확인 필요).
+_FILE_ADAPTERS = {
+    ".txt": (parse_txt_notes, "txt"),
+    ".pdf": (parse_document_notes, "pdf"),
+    ".html": (parse_document_notes, "notion"),
+    ".md": (parse_document_notes, "notion"),
+}
+
+
+def ingest_file(
+    path: str,
+    source: Literal["personal", "base", "stt_reference"],
+    course_id: str | None = None,
+) -> list[NoteMateState]:
+    """업로드된 파일 하나를 확장자로 판별해 알맞은 어댑터로 파싱하고,
+    각 조각을 순서대로 ingest_note()에 투입한다.
+
+    사용자/프론트엔드는 "업로드 버튼 하나"로 이 함수만 호출하면 되고,
+    txt/PDF 등 형식 차이는 이 함수 내부(어댑터 선택)에서만 처리된다.
+    """
+    ext = Path(path).suffix.lower()
+    if ext not in _FILE_ADAPTERS:
+        supported = ", ".join(_FILE_ADAPTERS)
+        raise ValueError(f"지원하지 않는 파일 형식: {ext} (지원: {supported})")
+
+    parse_fn, medium = _FILE_ADAPTERS[ext]
+    notes = parse_fn(path)
+
+    return [
+        ingest_note(
+            content=note.content,
+            source=source,
+            medium=medium,
+            origin_ref=note.origin_ref,
+            course_id=course_id,
+            timestamp=note.timestamp,
+        )
+        for note in notes
+    ]

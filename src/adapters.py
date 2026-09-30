@@ -1,6 +1,6 @@
 """필기 소스별 어댑터 -- 서로 다른 원본 형식을 ingest_note()가 받는 표준 입력으로 변환.
 
-지금은 txt 어댑터만 있음 (CLAUDE.md 개발 순서: "txt부터, OCR/노션은 이후").
+txt(개인 필기) + Docling 기반 문서 어댑터(PDF/노션 내보내기 등 수업자료) 둘 다 있음.
 """
 
 from dataclasses import dataclass
@@ -57,3 +57,36 @@ def parse_txt_notes(path: str) -> list[NoteInput]:
             )
         )
     return notes
+
+
+def parse_document_notes(path: str) -> list[NoteInput]:
+    """Docling으로 문서(PDF, 노션 내보내기 HTML/MD 등)를 파싱해 청크로 변환.
+
+    HybridChunker.contextualize()로 각 청크 앞에 소속 헤딩 경로를 붙인다
+    (예: "1주차: LangGraph 기초 > 조건부 엣지\\n<본문>") -- 헤딩 문맥이 있어야
+    임베딩이 "이게 무슨 얘기인지" 더 잘 담아서, 검색 품질이 좋아진다.
+
+    문서 자체엔 작성 시각이 없으므로 timestamp는 항상 None -- 모르는 걸 임의로
+    채우지 않는다는 CLAUDE.md 원칙 그대로.
+
+    docling은 무거운 의존성(torch 등)이라, txt만 쓰는 경로에서 매번 로드되지
+    않도록 함수 안에서 지연 import한다.
+    """
+    from docling.chunking import HybridChunker
+    from docling.document_converter import DocumentConverter
+
+    converter = DocumentConverter()
+    result = converter.convert(path)
+    doc = result.document
+
+    chunker = HybridChunker()
+    chunks = list(chunker.chunk(doc))
+
+    return [
+        NoteInput(
+            content=chunker.contextualize(chunk),
+            timestamp=None,
+            origin_ref=f"{path}:chunk{i}",
+        )
+        for i, chunk in enumerate(chunks)
+    ]

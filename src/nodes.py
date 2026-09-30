@@ -74,6 +74,18 @@ def assess_note(state: NoteMateState) -> dict:
     }
 
 
+def embed_and_store(state: NoteMateState) -> dict:
+    """참고자료(source="base"/"stt_reference") 전용 경로 -- 임베딩만 만들고 바로 저장.
+
+    업로드된 강의자료/참고자료는 사용자가 실시간으로 쓰는 필기가 아니라서
+    "질문인가/축약됐나" 같은 판단이나 힌트 생성이 의미가 없다 (누구에게 줄
+    힌트인지 불분명). Tier1/2 전체를 건너뛰고 여기서 바로 persist_note로 간다 --
+    LLM 호출을 아끼고, 판단 로그 통계에 필기가 아닌 자료가 섞이는 것도 방지.
+    """
+    embedding = get_embeddings_model().embed_query(state["content"])
+    return {"embedding": embedding}
+
+
 def decide_routing(state: NoteMateState) -> dict:
     """assess_note 이후, 판단 결과(routing_decision)를 State에 기록하는 노드.
 

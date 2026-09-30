@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head><title>LangGraph 개론</title></head>
+<body>
+<h1>1주차: LangGraph 기초</h1>
+<p>LangGraph는 상태를 가진 에이전트 워크플로우를 그래프 형태로 정의하는 프레임워크다.
+노드는 State를 입력받아 갱신된 State의 일부를 반환하는 함수이며, 엣지는 노드 간의
+실행 순서를 정의한다.</p>
+
+<h2>조건부 엣지</h2>
+<p>조건부 엣지는 현재 State를 보고 다음에 실행할 노드를 함수로 결정한다. add_conditional_edges()에
+라우팅 함수와 목적지 노드 매핑을 전달해서 구성한다.</p>
+
+<h1>2주차: 체크포인터와 메모리</h1>
+<p>체크포인터는 그래프 실행 중간의 State를 저장해, 나중에 동일한 thread_id로
+그 지점부터 이어서 실행할 수 있게 해주는 기능이다. 사람이 개입해야 하는
+워크플로우(human-in-the-loop)에서 특히 유용하다.</p>
+
+<h2>InMemory vs 영구 저장소</h2>
+<p>개발/테스트 단계에서는 InMemorySaver를 쓰고, 실제 운영 환경에서는 Postgres나
+SQLite 기반 체크포인터로 교체해 재시작 후에도 상태가 유지되도록 한다.</p>
+</body>
+</html>

@@ -40,3 +40,16 @@ def route(state: NoteMateState) -> Literal["tier2", "store_only"]:
     """조건부 엣지 함수 -- decide_routing 노드가 이미 State에 저장해둔
     routing_decision을 그대로 반환한다 (판단 로직 중복 방지)."""
     return state["routing_decision"]
+
+
+def route_by_source(state: NoteMateState) -> Literal["full_pipeline", "reference_only"]:
+    """그래프 진입 시점의 첫 갈림길 -- source에 따라 완전히 다른 경로로 보낸다.
+
+    "personal"(사용자가 지금 쓰는 필기)만 Tier1/2 전체 파이프라인(정리 노드 ->
+    라우팅 -> 힌트 생성)을 탄다. "base"/"stt_reference"(업로드된 참고자료)는
+    힌트/넛지가 필요 없는 자료라서 -- 임베딩만 만들어 바로 저장하는
+    가벼운 경로로 보낸다 (LLM 호출 2번어치 절약 + 판단 로그 통계 오염 방지).
+    """
+    if state["source"] == "personal":
+        return "full_pipeline"
+    return "reference_only"
