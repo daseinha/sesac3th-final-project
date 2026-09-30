@@ -98,6 +98,23 @@ def fetch_corpus_for_bm25(course_id: str | None) -> list[dict]:
             return [dict(zip(columns, row)) for row in cur.fetchall()]
 
 
+def log_session_event(session_id: str, event_type: str, note_count: int | None = None) -> None:
+    """세션 작업기억의 생애주기를 타임스탬프와 함께 기록.
+
+    화면에 명시적으로 드러나는 기능은 아니지만(사용자에게 안 보임), 나중에
+    "세션이 보통 얼마나 지속되는지, 몇 개나 쌓이는지" 분석하거나 유휴 타임아웃
+    자동 종료 기능을 설계할 때 필요한 데이터라 지금부터 남겨둔다.
+    """
+    pool = get_pool()
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO session_events (session_id, event_type, note_count) "
+                "VALUES (%(session_id)s, %(event_type)s, %(note_count)s);",
+                {"session_id": session_id, "event_type": event_type, "note_count": note_count},
+            )
+
+
 def insert_note_chunk(row: dict) -> None:
     """note_chunks에 판단 결과 한 행을 저장.
 

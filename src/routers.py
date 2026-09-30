@@ -16,11 +16,18 @@ from src.state import NoteMateState
 
 LOW_THRESHOLD = 0.75  # [잠정] 재생 테스트로 튜닝 예정
 HIGH_THRESHOLD = 0.85  # [잠정] 재생 테스트로 튜닝 예정
+SESSION_DUPLICATE_THRESHOLD = 0.85  # [잠정] 세션 내 중복 판정 기준 -- 실데이터 튜닝 필요
 
 
 def compute_routing_decision(state: NoteMateState) -> Literal["tier2", "store_only"]:
     assessment = state["assessment"]
     top_score = state["top_score"]
+
+    # 세션 내에서 방금 다룬 내용과 거의 같으면, 질문이든 뭐든 상관없이 중복
+    # 힌트를 만들지 않는다 (CLAUDE.md 6번 섹션 "용도1" -- 이미 방금 도와줬으므로).
+    session_dup = state.get("session_duplicate_score")
+    if session_dup is not None and session_dup >= SESSION_DUPLICATE_THRESHOLD:
+        return "store_only"
 
     if assessment and assessment["is_question"]:
         return "tier2"

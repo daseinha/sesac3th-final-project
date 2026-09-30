@@ -10,6 +10,7 @@ from src.db import insert_note_chunk, search_top_similarity
 from src.llm import embed_text, invoke_chat, invoke_structured
 from src.retrieval import build_hybrid_retriever
 from src.routers import compute_routing_decision
+from src.session_memory import add_to_session, check_session_duplicate
 from src.state import NoteAssessment, NoteMateState
 
 
@@ -44,8 +45,11 @@ def assess_note(state: NoteMateState) -> dict:
       비교할 기존 데이터가 없으면(첫 필기 등) top_score=0.0으로 처리한다
       ("지원 자료 없음"은 확신도가 낮은 것과 동일하게 취급 -> 자연히 tier2로 라우팅됨).
     - 신호 B: LLM 구조화 출력으로 필기 완결도 판단.
+    - 세션 내 작업기억 중복 검사: session_id가 있으면 이번 세션에서 이미 다룬
+      내용과 얼마나 비슷한지 확인 -> session_duplicate_score. session_id가
+      없으면(호출하는 쪽이 안 넘겼으면) None -- 세션 개념을 안 쓰는 호출도 지원.
 
-    TODO: 세션 내 작업기억(InMemory VectorStore) 중복 검사 -> session_duplicate_score
+    TODO: 세션 내 작업기억의 "용도2(긴 세션 맥락 압축)"는 아직 미구현
     """
     content = state["content"]
 
@@ -53,6 +57,11 @@ def assess_note(state: NoteMateState) -> dict:
 
     raw_top_score = search_top_similarity(embedding, course_id=state.get("course_id"))
     top_score = raw_top_score if raw_top_score is not None else 0.0
+
+    session_id = state.get("session_id")
+    session_duplicate_score = (
+        check_session_duplicate(session_id, embedding) if session_id else None
+    )
 
     result: _NoteAssessmentSchema = invoke_structured(
         _NoteAssessmentSchema,
@@ -72,7 +81,7 @@ def assess_note(state: NoteMateState) -> dict:
         "embedding": embedding,
         "top_score": top_score,
         "assessment": assessment,
-        "session_duplicate_score": None,  # TODO: 세션 내 작업기억 구현 후 채움
+        "session_duplicate_score": session_duplicate_score,
     }
 
 
@@ -182,4 +191,11 @@ def persist_note(state: NoteMateState) -> dict:
         "embedding": state.get("embedding"),
     }
     insert_note_chunk(row)
+
+    # 세션 작업기억에도 등록 -- 다음 필기가 "이거 방금 다뤘잖아" 판단할 수 있게.
+    # session_id가 없으면(세션 개념 안 쓰는 호출) 조용히 건너뜀.
+    session_id = state.get("session_id")
+    if session_id and state.get("embedding"):
+        add_to_session(session_id, state["embedding"])
+
     return {}

@@ -24,6 +24,7 @@ class NoteMateState(TypedDict):
     course_id: str | None
     note_timestamp: str | None  # ISO 문자열. DB 컬럼명(note_timestamp)과 통일
     origin_ref: str
+    session_id: str | None  # 호출하는 쪽이 지정. 세션 경계 판단은 백엔드가 안 함
 
     # --- 처리 중간 산출물 ---
     embedding: list[float] | None

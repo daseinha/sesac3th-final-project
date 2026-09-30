@@ -15,6 +15,7 @@ from typing import Literal
 
 from src.adapters import parse_document_notes, parse_txt_notes
 from src.app import graph
+from src.session_memory import end_session  # noqa: F401 -- 재노출 (공개 API로 여기서 접근)
 from src.state import NoteMateState
 
 
@@ -25,6 +26,7 @@ def ingest_note(
     origin_ref: str,
     course_id: str | None = None,
     timestamp: datetime | None = None,
+    session_id: str | None = None,
 ) -> NoteMateState:
     """필기 한 조각을 파이프라인에 투입하고, 처리 완료된 최종 State를 반환한다.
 
@@ -35,6 +37,9 @@ def ingest_note(
         origin_ref: 원본 파일/줄 위치 (원문 보기용 참조).
         course_id: 주차/토픽 단위 식별자 (예: "langgraph_week"). 모르면 None.
         timestamp: 필기 작성 시각. 모르면 None (임의로 채우지 않음).
+        session_id: 세션 내 작업기억(중복 힌트 방지)에 쓸 식별자. 세션 경계는
+            호출하는 쪽이 정한다 -- 안 넘기면 세션 기능 없이 동작(기존과 동일).
+            세션이 끝나면 end_session(session_id)로 정리해줄 것.
 
     Returns:
         그래프 실행이 끝난 최종 State. routing_decision으로 Tier1/2 여부를,
@@ -47,6 +52,7 @@ def ingest_note(
         "course_id": course_id,
         "note_timestamp": timestamp.isoformat() if timestamp else None,
         "origin_ref": origin_ref,
+        "session_id": session_id,
     }
     return graph.invoke(initial_state)
 
@@ -65,6 +71,7 @@ def ingest_file(
     path: str,
     source: Literal["personal", "base", "stt_reference"],
     course_id: str | None = None,
+    session_id: str | None = None,
 ) -> list[NoteMateState]:
     """업로드된 파일 하나를 확장자로 판별해 알맞은 어댑터로 파싱하고,
     각 조각을 순서대로 ingest_note()에 투입한다.
@@ -88,6 +95,7 @@ def ingest_file(
             origin_ref=note.origin_ref,
             course_id=course_id,
             timestamp=note.timestamp,
+            session_id=session_id,
         )
         for note in notes
     ]
