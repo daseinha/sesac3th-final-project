@@ -116,3 +116,81 @@ def parse_document_notes(path: str) -> list[NoteInput]:
         )
         for i, chunk in enumerate(chunks)
     ]
+
+
+_PAPER_OCR_PROMPT = (
+    "이 이미지는 한국어 손글씨 필기 스캔본입니다. 보이는 텍스트를 최대한 정확하게 "
+    "그대로 옮겨써주세요. 읽을 수 없는 부분은 [판독불가]로 표시하세요. "
+    "본문에 날짜(예: 6/29, 2026.07.02, 20260831 등)가 명확히 보이면 detected_date에 "
+    "YYYY-MM-DD 형식으로 채우고, 안 보이거나 확실하지 않으면 null로 두세요."
+)
+
+
+def parse_paper_scan_notes(path: str) -> list[NoteInput]:
+    """손글씨 스캔 PDF를 페이지 단위로 비전 LLM으로 읽어서 변환.
+
+    전통 OCR(Docling+RapidOCR/EasyOCR)은 이 손글씨 데이터에서 인식률이 낮고
+    날짜도 거의 못 읽었다(61페이지 중 3개). gpt-4.1-mini 비전으로 교체 --
+    실측 비교(2026-09-30, CLAUDE.md 참고)에서 gpt-4o는 API키/인증 관련
+    페이지를 60%(5개 중 3개) 거부했지만 gpt-4.1-mini는 거부 없이 날짜까지
+    정확히 인식함.
+
+    페이지마다 날짜 인식을 구조화 출력으로 같이 시도한다 -- 못 읽으면 None
+    (임의로 채우지 않음). 내용 없는 페이지는 스킵.
+    """
+    import base64
+    import io
+
+    import pypdfium2 as pdfium
+    from pydantic import BaseModel, Field
+
+    from src.llm import invoke_structured
+
+    class _PageOcrResult(BaseModel):
+        transcription: str = Field(description="이미지 속 손글씨 텍스트를 최대한 정확하게 옮겨쓴 것")
+        detected_date: str | None = Field(
+            default=None,
+            description="본문에서 명확히 식별되는 날짜가 있으면 YYYY-MM-DD 형식으로, 없거나 불확실하면 null",
+        )
+
+    pdf = pdfium.PdfDocument(path)
+    notes: list[NoteInput] = []
+
+    for i, page in enumerate(pdf, start=1):
+        bitmap = page.render(scale=2.0)
+        buf = io.BytesIO()
+        bitmap.to_pil().save(buf, format="PNG")
+        img_b64 = base64.b64encode(buf.getvalue()).decode()
+
+        result: _PageOcrResult = invoke_structured(
+            _PageOcrResult,
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": _PAPER_OCR_PROMPT},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{img_b64}"},
+                        },
+                    ],
+                }
+            ],
+            purpose="paper_ocr_page",
+        )
+
+        if not _has_substantial_content(result.transcription):
+            continue
+
+        timestamp = None
+        if result.detected_date:
+            try:
+                timestamp = datetime.strptime(result.detected_date, "%Y-%m-%d")
+            except ValueError:
+                pass  # 형식이 안 맞으면 그냥 None으로 둠 -- 임의로 채우지 않음
+
+        notes.append(
+            NoteInput(content=result.transcription, timestamp=timestamp, origin_ref=f"{path}:page{i}")
+        )
+
+    return notes
