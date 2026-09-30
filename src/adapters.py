@@ -57,11 +57,25 @@ def parse_document_notes(path: str) -> list[NoteInput]:
 
     docling은 무거운 의존성(torch 등)이라, txt만 쓰는 경로에서 매번 로드되지
     않도록 함수 안에서 지연 import한다.
-    """
-    from docling.chunking import HybridChunker
-    from docling.document_converter import DocumentConverter
 
-    converter = DocumentConverter()
+    OCR/표구조 인식은 기본 꺼둔다 -- 우리가 다루는 문서는 노션 등에서 복붙한
+    단순 텍스트(표/스캔 이미지 없음)라 이 두 단계가 필요 없고, 꺼두면 속도가
+    ~4배 빨라짐(4페이지 PDF 기준 21.2초 -> 5.5초, 2026-09-30 실측). 표/스캔
+    이미지가 있는 문서를 다뤄야 하면 그때 이 옵션을 켜거나(속도 손해 감수) LlamaParse로
+    전환 -- CLAUDE.md 기술 스펙의 "Docling이 구조를 못 잡는 문서만 LlamaParse" 기준 그대로.
+    """
+    from docling.datamodel.base_models import InputFormat
+    from docling.datamodel.pipeline_options import PdfPipelineOptions
+    from docling.chunking import HybridChunker
+    from docling.document_converter import DocumentConverter, PdfFormatOption
+
+    pipeline_options = PdfPipelineOptions()
+    pipeline_options.do_ocr = False
+    pipeline_options.do_table_structure = False
+
+    converter = DocumentConverter(
+        format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)}
+    )
     result = converter.convert(path)
     doc = result.document
 
