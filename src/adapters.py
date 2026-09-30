@@ -11,6 +11,11 @@ from pathlib import Path
 # 파일명 앞 8자리 숫자를 그날 날짜로 인식 (예: "20260702 (목) 4회차 수업일지.txt")
 _FILENAME_DATE_RE = re.compile(r"^(\d{8})")
 
+# 파일 "내용" 안에서 날짜 구분 헤더를 인식 (예: "20260715 수 (서초 새싹 13일차) 점심 (...)").
+# 하루 단위 파일이든, 여러 날짜가 합쳐진 합본 파일이든 이 패턴이 나올 때마다
+# "현재 날짜"를 갱신하는 방식으로 둘 다 같은 로직으로 처리한다.
+_DAY_HEADER_RE = re.compile(r"^(\d{8})\s*[월화수목금토일]", re.MULTILINE)
+
 # 한글/영문/숫자가 이 정도는 있어야 "내용 있는 청크"로 취급. 구분선(------)만
 # 있거나 텅 빈 문단은 걸러낸다 -- 실제 필기 파일에서 파일마다 반복 확인된 노이즈.
 _SUBSTANTIAL_CONTENT_RE = re.compile(r"[가-힣a-zA-Z0-9]{3,}")
@@ -30,19 +35,25 @@ class NoteInput:
 
 
 def parse_txt_notes(path: str) -> list[NoteInput]:
-    """하루 단위 필기 일지(txt)를 파싱한다.
+    """필기 일지(txt)를 파싱한다. 파일 하나 = 하루든, 여러 날짜가 합쳐진
+    합본이든 둘 다 처리한다.
 
-    실제 사용자 파일 형식(2026-09-30 확인): 파일 하나 = 하루치 필기 전체.
-    파일 안에는 타임스탬프가 따로 없고, 파일명 앞 8자리 숫자(YYYYMMDD)가 그날
-    날짜다. 그 하루 동안 쓴 필기가 쭉 이어지며, 빈 줄로 대략적인 단락(주제)이
-    나뉜다.
+    실제 사용자 파일 형식(2026-09-30 확인): 타임스탬프가 조각마다 따로 없고,
+    "20260715 수 (...) 점심 (...)" 같은 날짜 헤더가 하루 분량 시작마다 나온다.
+    빈 줄로 대략적인 단락(주제)이 나뉜다.
+
+    처리 방식: 빈 줄로 전체를 문단 나눈 뒤, 순서대로 훑으면서 날짜 헤더 패턴을
+    만나면 "현재 날짜"를 그 값으로 갱신 -- 이후 문단들은 다음 헤더가 나올 때까지
+    그 날짜를 그대로 물려받는다. 파일명에 날짜가 있으면(기존 "파일 하나=하루"
+    파일들) 그걸 시작 기본값으로 쓰고, 파일 맨 앞에 헤더가 없어도 자연스럽게
+    맞아떨어진다. 합본 파일처럼 파일명에 날짜가 없으면 첫 헤더를 만나기 전까지는
+    timestamp=None.
 
     ([잠정] 이전 버전은 "조각마다 [YYYY-MM-DD HH:MM] 인라인 표시"를 가정했는데,
-    실제 파일과 달라서 이 버전으로 교체함 -- CLAUDE.md 변경 이력 참고. 파일명에
-    날짜가 없으면 timestamp=None으로 남긴다.)
+    실제 파일과 달라서 이 버전으로 교체함 -- CLAUDE.md 변경 이력 참고.)
     """
     match = _FILENAME_DATE_RE.match(Path(path).stem)
-    file_date = datetime.strptime(match.group(1), "%Y%m%d") if match else None
+    current_date = datetime.strptime(match.group(1), "%Y%m%d") if match else None
 
     text = open(path, encoding="utf-8").read()
     paragraphs = [
@@ -51,10 +62,13 @@ def parse_txt_notes(path: str) -> list[NoteInput]:
         if p.strip() and _has_substantial_content(p)
     ]
 
-    return [
-        NoteInput(content=paragraph, timestamp=file_date, origin_ref=f"{path}:{i}")
-        for i, paragraph in enumerate(paragraphs)
-    ]
+    notes: list[NoteInput] = []
+    for i, paragraph in enumerate(paragraphs):
+        header_match = _DAY_HEADER_RE.search(paragraph)
+        if header_match:
+            current_date = datetime.strptime(header_match.group(1), "%Y%m%d")
+        notes.append(NoteInput(content=paragraph, timestamp=current_date, origin_ref=f"{path}:{i}"))
+    return notes
 
 
 def parse_document_notes(path: str) -> list[NoteInput]:
