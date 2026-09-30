@@ -11,7 +11,10 @@ from pathlib import Path
 
 from src.api import _FILE_ADAPTERS, ingest_file
 
-_SOURCE_FOLDERS = ("personal", "base", "stt_reference")
+# base/stt_reference(참고자료)를 personal(필기)보다 먼저 처리한다 -- 신호 A(지원
+# 자료 충분도)가 강의자료까지 포함해서 유사도를 재기 때문에, 강의자료가 먼저
+# DB에 있어야 필기 입력 시 "이미 강의자료에 나온 내용"이라고 제대로 판단됨.
+_SOURCE_FOLDERS = ("base", "stt_reference", "personal")
 
 
 def ingest_data_folder(
