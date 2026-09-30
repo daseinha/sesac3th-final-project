@@ -6,8 +6,9 @@ tier2_deep_agent, store_only는 아직 스텁 -- 각 함수의 TODO 참고.
 
 from pydantic import BaseModel, Field
 
-from src.db import insert_note_chunk, search_similar_chunks, search_top_similarity
+from src.db import insert_note_chunk, search_top_similarity
 from src.llm import embed_text, invoke_chat, invoke_structured
+from src.retrieval import build_hybrid_retriever
 from src.routers import compute_routing_decision
 from src.state import NoteAssessment, NoteMateState
 
@@ -109,26 +110,21 @@ _TIER2_SYSTEM_PROMPT = (
 def tier2_deep_agent(state: NoteMateState) -> dict:
     """Tier2: 확신도 낮거나 명시적 질문일 때만 실행되는 딥 에이전트.
 
-    - 장기 기억(note_chunks) 검색: assess_note의 얕은 top-1 조회와 달리,
-      실제 근거로 쓸 top-k(5개) 필기를 가져와 LLM에 컨텍스트로 제공.
+    - 장기 기억(note_chunks) 검색: 벡터 유사도 + BM25(Kiwi 형태소분석) 하이브리드
+      검색(EnsembleRetriever, CLAUDE.md 기술 스펙 [확정])으로 top-k(5개) 필기를
+      가져와 LLM에 컨텍스트로 제공. 벡터 검색만으론 "의미는 비슷한데 정확한
+      용어가 다른" 경우를 놓칠 수 있어서, 키워드 기반 BM25로 보완한다.
     - LLM이 그 근거를 바탕으로 힌트(tier2_result)를 생성 -- 이게 "앵커 카드 보강" 내용.
 
     TODO:
       - 단기 기억(세션 내 InMemory VectorStore) 검색 -- 아직 세션 개념 없음
       - 원본 드릴다운(origin_ref로 원본 파일 실제 열람) -- 지금은 origin_ref 텍스트만 참고
     """
-    embedding = state.get("embedding")
-    similar_chunks = (
-        search_similar_chunks(embedding, course_id=state.get("course_id"), k=5)
-        if embedding
-        else []
-    )
+    retriever = build_hybrid_retriever(course_id=state.get("course_id"), k=5)
+    similar_docs = retriever.invoke(state["content"]) if retriever else []
 
-    if similar_chunks:
-        context = "\n".join(
-            f"- ({c['source']}, 유사도 {c['similarity']:.2f}) {c['content']}"
-            for c in similar_chunks
-        )
+    if similar_docs:
+        context = "\n".join(f"- ({d.metadata.get('source')}) {d.page_content}" for d in similar_docs)
     else:
         context = "(참고할 만한 이전 필기 없음)"
 

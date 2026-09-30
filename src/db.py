@@ -77,6 +77,27 @@ def search_similar_chunks(
             return [dict(zip(columns, row)) for row in cur.fetchall()]
 
 
+def fetch_corpus_for_bm25(course_id: str | None) -> list[dict]:
+    """BM25 인덱스를 만들기 위해 course_id 범위의 note_chunks content를 전부 가져온다.
+
+    LangChain의 BM25Retriever가 인메모리 방식이라, 매 검색 시점에 이 함수로
+    코퍼스를 불러와서 즉석으로 인덱스를 만든다(src/retrieval.py).
+    """
+    pool = get_pool()
+    course_filter = "WHERE course_id = %(course_id)s" if course_id else ""
+    query = f"""
+        SELECT content, source, origin_ref
+        FROM note_chunks
+        {course_filter}
+        ORDER BY id;
+    """
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, {"course_id": course_id})
+            columns = [c.name for c in cur.description]
+            return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+
 def insert_note_chunk(row: dict) -> None:
     """note_chunks에 판단 결과 한 행을 저장.
 
