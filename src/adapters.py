@@ -67,6 +67,11 @@ def parse_txt_notes(path: str) -> list[NoteInput]:
         header_match = _DAY_HEADER_RE.search(paragraph)
         if header_match:
             current_date = datetime.strptime(header_match.group(1), "%Y%m%d")
+            # 헤더 문단(날짜/장소/점심메뉴) 자체는 학습 내용이 아니라 메타정보라
+            # 청크로 남기지 않는다 -- 날짜 갱신에만 쓰고 건너뜀. 2026-09-30 실측:
+            # 이런 헤더 조각이 경계 구간(top_score 0.7~0.9)에서 Tier2를 낭비시킨
+            # 사례의 대부분(62%, 45개 중 28개)이었음. CLAUDE.md 변경 이력 참고.
+            continue
         notes.append(NoteInput(content=paragraph, timestamp=current_date, origin_ref=f"{path}:{i}"))
     return notes
 
