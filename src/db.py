@@ -110,12 +110,12 @@ def insert_note_chunk(row: dict) -> None:
         INSERT INTO note_chunks (
             content, source, medium, course_id, note_timestamp, origin_ref,
             top_score, is_question, is_abbreviated, is_new_concept,
-            session_duplicate_score, routing_decision, embedding
+            session_duplicate_score, routing_decision, tier2_result, embedding
         ) VALUES (
             %(content)s, %(source)s, %(medium)s, %(course_id)s,
             %(note_timestamp)s, %(origin_ref)s,
             %(top_score)s, %(is_question)s, %(is_abbreviated)s, %(is_new_concept)s,
-            %(session_duplicate_score)s, %(routing_decision)s, %(embedding)s::vector
+            %(session_duplicate_score)s, %(routing_decision)s, %(tier2_result)s, %(embedding)s::vector
         );
     """
     with pool.connection() as conn:

@@ -178,6 +178,7 @@ def persist_note(state: NoteMateState) -> dict:
         "is_new_concept": assessment.get("is_new_concept"),
         "session_duplicate_score": state.get("session_duplicate_score"),
         "routing_decision": state.get("routing_decision"),
+        "tier2_result": state.get("tier2_result"),
         "embedding": state.get("embedding"),
     }
     insert_note_chunk(row)
