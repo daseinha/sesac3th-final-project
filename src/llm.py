@@ -72,9 +72,20 @@ def invoke_chat(messages: list[dict], purpose: str):
     return response
 
 
-def invoke_structured(schema: type[BaseModel], messages: list[dict], purpose: str) -> BaseModel:
-    """구조화 출력 호출 + 토큰 사용량 기록. 파싱된 스키마 객체를 반환."""
-    structured_model = get_chat_model().with_structured_output(schema, include_raw=True)
+def invoke_structured(
+    schema: type[BaseModel], messages: list[dict], purpose: str, max_tokens: int | None = None
+) -> BaseModel:
+    """구조화 출력 호출 + 토큰 사용량 기록. 파싱된 스키마 객체를 반환.
+
+    max_tokens: 모델이 응답을 비정상적으로 길게(예: 반복 출력) 생성해서 길이
+    제한에 걸려 파싱 자체가 실패하는 경우가 있어(2026-09-30 실측, 3만 토큰
+    이상 생성) 상한을 걸어 비용 폭주를 막는다. 그래도 실패할 수 있는데, 그건
+    호출부에서 try/except로 페이지 단위 skip 처리하면 됨.
+    """
+    base_model = get_chat_model()
+    if max_tokens is not None:
+        base_model = base_model.bind(max_tokens=max_tokens)
+    structured_model = base_model.with_structured_output(schema, include_raw=True)
     result = structured_model.invoke(messages)
     usage = result["raw"].usage_metadata or {}
     record_usage(

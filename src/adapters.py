@@ -162,22 +162,27 @@ def parse_paper_scan_notes(path: str) -> list[NoteInput]:
         bitmap.to_pil().save(buf, format="PNG")
         img_b64 = base64.b64encode(buf.getvalue()).decode()
 
-        result: _PageOcrResult = invoke_structured(
-            _PageOcrResult,
-            [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": _PAPER_OCR_PROMPT},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{img_b64}"},
-                        },
-                    ],
-                }
-            ],
-            purpose="paper_ocr_page",
-        )
+        try:
+            result: _PageOcrResult = invoke_structured(
+                _PageOcrResult,
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": _PAPER_OCR_PROMPT},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/png;base64,{img_b64}"},
+                            },
+                        ],
+                    }
+                ],
+                purpose="paper_ocr_page",
+                max_tokens=2000,
+            )
+        except Exception as e:  # noqa: BLE001 -- 페이지 하나 실패해도 나머지는 계속 처리
+            print(f"[page {i}] 실패, 스킵: {type(e).__name__}: {e}")
+            continue
 
         if not _has_substantial_content(result.transcription):
             continue
