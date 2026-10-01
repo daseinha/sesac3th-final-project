@@ -123,25 +123,33 @@ def parse_document_notes(path: str) -> list[NoteInput]:
     ]
 
 
-_PAPER_OCR_PROMPT = (
-    "이 이미지는 한국어 손글씨 필기 스캔본입니다. 보이는 텍스트를 최대한 정확하게 "
-    "그대로 옮겨써주세요. 읽을 수 없는 부분은 [판독불가]로 표시하세요. "
-    "본문에 날짜(예: 6/29, 2026.07.02, 20260831 등)가 명확히 보이면 detected_date에 "
-    "YYYY-MM-DD 형식으로 채우고, 안 보이거나 확실하지 않으면 null로 두세요."
+_VISION_OCR_PROMPT = (
+    "이 이미지는 문서 페이지입니다(손글씨 필기 스캔본이거나, 웹페이지를 캡처한 "
+    "자료일 수 있습니다). 보이는 텍스트를 최대한 정확하게 옮겨써주세요 -- 제목/"
+    "목록/코드블록 같은 구조가 있으면 마크다운으로 살려서 옮기세요. 읽을 수 없는 "
+    "부분은 [판독불가]로 표시하세요. 본문에 날짜(예: 6/29, 2026.07.02, 20260831 "
+    "등)가 명확히 보이면 detected_date에 YYYY-MM-DD 형식으로 채우고, 안 보이거나 "
+    "확실하지 않으면(예: 강의자료처럼 날짜 자체가 없는 문서) null로 두세요."
 )
 
 
-def parse_paper_scan_notes(path: str) -> list[NoteInput]:
-    """손글씨 스캔 PDF를 페이지 단위로 비전 LLM으로 읽어서 변환.
+def parse_vision_pdf_notes(path: str) -> list[NoteInput]:
+    """텍스트 레이어가 없는 PDF를 페이지 단위로 비전 LLM(gpt-4.1-mini)으로 읽어서 변환.
 
-    전통 OCR(Docling+RapidOCR/EasyOCR)은 이 손글씨 데이터에서 인식률이 낮고
-    날짜도 거의 못 읽었다(61페이지 중 3개). gpt-4.1-mini 비전으로 교체 --
-    실측 비교(2026-09-30, CLAUDE.md 참고)에서 gpt-4o는 API키/인증 관련
-    페이지를 60%(5개 중 3개) 거부했지만 gpt-4.1-mini는 거부 없이 날짜까지
-    정확히 인식함.
+    원래 손글씨 스캔본용으로 만들었는데(전통 OCR 인식률이 낮고 날짜도 거의 못
+    읽음, 61페이지 중 3개만 성공), **GoFullPage 같은 스크롤 캡처 도구로 만든
+    "이미지형" PDF에도 그대로 재사용**한다 -- 2026-10-01 실측: 이런 PDF는
+    텍스트 레이어가 없는 건 물론, Docling의 OCR(RapidOCR/EasyOCR 둘 다)마저
+    완전히 실패함(다크모드 코드블록 등에서 레이아웃 분석 자체가 텍스트를 하나도
+    못 찾음, 4페이지 전부 빈 결과). 비전 LLM은 거부 없이 마크다운 구조까지
+    살려서 정확하게 옮김.
+
+    실측 비교(2026-09-30, CLAUDE.md 참고)에서 `gpt-4o`는 API키/인증 관련
+    페이지를 60%(5개 중 3개) 거부했지만 `gpt-4.1-mini`는 거부 없이 처리함.
 
     페이지마다 날짜 인식을 구조화 출력으로 같이 시도한다 -- 못 읽으면 None
-    (임의로 채우지 않음). 내용 없는 페이지는 스킵.
+    (임의로 채우지 않음, 강의자료처럼 애초에 날짜가 없는 문서도 자연히 None).
+    내용 없는 페이지는 스킵.
     """
     import base64
     import io
@@ -174,7 +182,7 @@ def parse_paper_scan_notes(path: str) -> list[NoteInput]:
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": _PAPER_OCR_PROMPT},
+                            {"type": "text", "text": _VISION_OCR_PROMPT},
                             {
                                 "type": "image_url",
                                 "image_url": {"url": f"data:image/png;base64,{img_b64}"},
@@ -182,7 +190,7 @@ def parse_paper_scan_notes(path: str) -> list[NoteInput]:
                         ],
                     }
                 ],
-                purpose="paper_ocr_page",
+                purpose="vision_pdf_page",
                 max_tokens=2000,
             )
         except Exception as e:  # noqa: BLE001 -- 페이지 하나 실패해도 나머지는 계속 처리
@@ -204,3 +212,18 @@ def parse_paper_scan_notes(path: str) -> list[NoteInput]:
         )
 
     return notes
+
+
+def parse_pdf_notes(path: str) -> list[NoteInput]:
+    """PDF 파싱 진입점 -- 텍스트 레이어 유무를 자동 판별해 알맞은 방식으로 처리.
+
+    같은 `.pdf` 확장자 안에 "디지털 문서"(Notion 복붙, 인쇄->PDF 등 실제 텍스트
+    있음)와 "이미지형"(손글씨 스캔, GoFullPage 같은 스크롤 캡처 -- 텍스트 레이어
+    없음) 둘 다 있어서 폴더/이름 규칙으로 미리 구분하는 대신, **일단 빠른
+    방법(Docling, OCR 끔)을 시도하고 결과가 비어있으면(=텍스트 레이어가 없다는
+    뜻) 비전 LLM으로 자동 전환**하는 방식으로 판별한다 (2026-10-01).
+    """
+    notes = parse_document_notes(path)
+    if notes:
+        return notes
+    return parse_vision_pdf_notes(path)

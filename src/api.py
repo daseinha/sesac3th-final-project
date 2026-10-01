@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
-from src.adapters import parse_document_notes, parse_txt_notes
+from src.adapters import parse_document_notes, parse_pdf_notes, parse_txt_notes
 from src.app import graph
 from src.session_memory import end_session  # noqa: F401 -- 재노출 (공개 API로 여기서 접근)
 from src.state import NoteMateState
@@ -59,9 +59,11 @@ def ingest_note(
 
 # 확장자 -> (어댑터 함수, medium 값). 새 형식을 지원하려면 여기에 한 줄만 추가하면 됨.
 # .html/.md는 노션 내보내기라고 가정([잠정] -- 실제 노션 내보내기 파일 보면 재확인 필요).
+# .pdf는 parse_pdf_notes()가 텍스트 레이어 유무를 자동 판별해 디지털/이미지형을
+# 알아서 분기한다(2026-10-01, GoFullPage 같은 스크롤 캡처 PDF 대응).
 _FILE_ADAPTERS = {
     ".txt": (parse_txt_notes, "txt"),
-    ".pdf": (parse_document_notes, "pdf"),
+    ".pdf": (parse_pdf_notes, "pdf"),
     ".html": (parse_document_notes, "notion"),
     ".md": (parse_document_notes, "notion"),
 }
