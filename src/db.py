@@ -98,6 +98,51 @@ def fetch_corpus_for_bm25(course_id: str | None) -> list[dict]:
             return [dict(zip(columns, row)) for row in cur.fetchall()]
 
 
+def is_file_already_ingested(path: str) -> bool:
+    """이 파일에서 나온 청크가 note_chunks에 이미 있는지 확인.
+
+    origin_ref는 항상 "{path}:..." 형태로 저장되니(어댑터마다 :page1, :chunk0 등
+    접미사만 다름), 그 접두사로 매칭한다. `ingest_folder.py`가 폴더를 반복
+    스캔할 때 이미 처리된 파일을 중복으로 또 넣지 않도록 하는 용도.
+
+    경로를 "data/<source>/..." 형태로 정규화해서 비교한다 -- 구분자(\\\\ vs /)뿐
+    아니라 절대경로/상대경로 차이도 같은 문제를 일으킨다는 게 실제로 확인됐다
+    (2026-10-01: 예전에 절대경로로 수동 인제스트했던 49~57회차 파일이, 이번에
+    상대경로로 비교하는 ingest_folder.py 때문에 "처리 안 된 파일"로 오판돼
+    9개 파일, 280개 청크가 통째로 중복 적재됨 -- CLAUDE.md 참고). data/ 하위
+    경로만 기준으로 비교하면 호출 시점의 작업 디렉터리나 절대/상대 표기 방식에
+    관계없이 같은 파일을 같은 파일로 인식한다.
+    """
+    pool = get_pool()
+    normalized = _normalize_data_path(path) + ":%"
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                r"""
+                SELECT 1 FROM note_chunks
+                WHERE regexp_replace(replace(origin_ref, '\', '/'), '^.*(data/(personal|base|stt_reference)/)', '\1')
+                      LIKE %(prefix)s
+                LIMIT 1;
+                """,
+                {"prefix": normalized},
+            )
+            return cur.fetchone() is not None
+
+
+def _normalize_data_path(path: str) -> str:
+    """경로를 "data/<personal|base|stt_reference>/..." 형태로 정규화.
+
+    절대경로든 상대경로든, 구분자가 \\\\든 /든 상관없이 "data/" 이후 부분만
+    남긴다. is_file_already_ingested()의 DB 쪽 정규화(SQL regexp_replace)와
+    반드시 같은 규칙을 써야 하므로 별도 함수로 분리해 재사용한다.
+    """
+    import re
+
+    forward = path.replace("\\", "/")
+    match = re.search(r"data/(personal|base|stt_reference)/.*", forward)
+    return match.group(0) if match else forward
+
+
 def log_session_event(session_id: str, event_type: str, note_count: int | None = None) -> None:
     """세션 작업기억의 생애주기를 타임스탬프와 함께 기록.
 

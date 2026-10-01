@@ -9,7 +9,10 @@ data/는 .gitignore에 등록돼 있어서 여기 넣는 실제 파일은 커밋
 import argparse
 from pathlib import Path
 
+from tqdm import tqdm
+
 from src.api import _FILE_ADAPTERS, ingest_file
+from src.db import is_file_already_ingested
 
 # base/stt_reference(참고자료)를 personal(필기)보다 먼저 처리한다 -- 신호 A(지원
 # 자료 충분도)가 강의자료까지 포함해서 유사도를 재기 때문에, 강의자료가 먼저
@@ -45,8 +48,15 @@ def ingest_data_folder(
             for skipped_file in skipped:
                 log.write(f"[스킵 -- 지원 안 하는 확장자] {skipped_file.name}\n")
 
-            for f in files:
+            progress = tqdm(files, desc=f"{source}", unit="file")
+            for f in progress:
+                progress.set_postfix_str(f.name[:40])
                 log.write(f"\n--- {f.name} ---\n")
+
+                if is_file_already_ingested(str(f)):
+                    log.write("[스킵 -- 이미 처리된 파일]\n")
+                    continue
+
                 try:
                     results = ingest_file(str(f), source=source, course_id=course_id)
                 except Exception as e:  # noqa: BLE001 -- 파일 하나 실패해도 나머지는 계속
