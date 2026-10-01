@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>노트메이트 — Streamlit 목업 미리보기</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font-family: 'Source Sans 3', -apple-system, BlinkMacSystemFont, sans-serif; background: #FFFFFF; color: #31333F; }
+  ::placeholder { color: #808495; }
+  @keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+  .cursor { display: inline-block; width: 2px; height: 1.1em; background: #31333F; vertical-align: text-bottom; animation: blink 1s step-start infinite; margin-left: 2px; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .pulse-dot { animation: pulse 1.8s ease-in-out infinite; }
+</style>
+</head>
+<body>
+
+<div style="display: flex; flex-direction: column; width: 100%; height: 100vh;">
+
+  <!-- ===== Top bar ===== -->
+  <div style="flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 16px 32px; border-bottom: 1px solid #E6E9EF;">
+    <div style="display: flex; align-items: center; gap: 16px;">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FF4B4B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        <span style="font-size: 18px; font-weight: 700;">노트메이트</span>
+      </div>
+      <div style="width: 1px; height: 20px; background: #E6E9EF;"></div>
+      <div style="display: flex; align-items: center; gap: 6px; background: #F0F2F6; border-radius: 6px; padding: 6px 10px 6px 12px; cursor: pointer;">
+        <span style="font-size: 13.5px; color: #31333F;">SeSAC 부트캠프 65기</span>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#808495" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      </div>
+    </div>
+    <div style="display: flex; align-items: center; gap: 14px;">
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <!-- 선택/업로드된 파일 상태 필드 -- 비어있을 땐 "선택된 파일 없음"(회색), 선택되면 파일명+상태 칩으로 바뀜 -->
+        <div style="display: flex; align-items: center; gap: 6px; background: #F7F8FA; border: 1px solid #E6E9EF; border-radius: 6px; padding: 6px 10px; font-size: 12.5px; max-width: 220px;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#595F6E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          <span style="color: #31333F; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">11.sql_DB기초와CRUD.pdf</span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#21C354" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><polyline points="20 6 9 17 4 12"/></svg>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ABB1BF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; cursor: pointer; margin-left: 2px;"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </div>
+        <button style="display: flex; align-items: center; gap: 7px; background: #FFFFFF; border: 1px solid #D3D3D3; border-radius: 8px; padding: 7px 14px; font-size: 13px; font-weight: 500; color: #31333F; cursor: pointer; flex-shrink: 0;">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#31333F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          자료 업로드
+        </button>
+      </div>
+      <div style="display: flex; align-items: center; gap: 7px; background: #E8F8EC; border-radius: 999px; padding: 5px 14px 5px 10px;">
+        <div style="width: 8px; height: 8px; border-radius: 50%; background: #21C354;"></div>
+        <span style="font-size: 13px; font-weight: 500; color: #1A7A37;">세션 진행 중</span>
+      </div>
+    </div>
+  </div>
+
+  <div style="display: flex; flex-grow: 1; min-height: 0; position: relative;">
+
+    <!-- ===== Left: 필기 입력창 (notepad, 실제로 클릭해서 어디든 편집 가능) ===== -->
+    <section id="note-scroll" style="flex-grow: 1; min-width: 0; overflow-y: auto; padding: 48px 64px; position: relative;">
+      <div
+        id="note-body"
+        contenteditable="true"
+        spellcheck="false"
+        style="max-width: 680px; min-height: 100%; font-size: 16px; line-height: 2; color: #31333F; outline: none; caret-color: #FF4B4B;"
+      >
+        <p style="margin: 0 0 1.4em;">1교시 — 어제 복습. GitHub Actions로 CI/CD 파이프라인 자동화하는 방법 정리. workflow yml 파일은 .github/workflows 아래에 둔다.</p>
+        <p style="margin: 0 0 1.4em;">on: push, pull_request 트리거 설정. jobs 아래 steps 순서대로 실행됨.</p>
+        <p style="margin: 0 0 1.4em;">pytest fixture 스코프 session / module / function 차이. session은 테스트 전체에서 한 번만, function은 테스트마다 새로 생성.</p>
+        <p style="margin: 0 0 1.4em;">conftest.py에 공통 fixture 모아두면 여러 테스트 파일에서 재사용 가능.</p>
+        <p style="margin: 0 0 1.4em;">2교시 — ??? 클로저랑 스코프 헷갈림. 나중에 다시 정리하기.</p>
+        <p style="margin: 0 0 1.4em;">Docker 멀티스테이지 빌드로 이미지 용량 줄이기. builder 단계에서 빌드하고 최종 이미지엔 결과물만 복사.</p>
+        <p style="margin: 0 0 1.4em;">FROM node:20 AS builder → COPY --from=builder 패턴 기억하기.</p>
+        <p style="margin: 0 0 1.4em;">REST API 설계 원칙 — 리소스 중심 URL, 상태코드 일관성. /users/1처럼 명사형으로.</p>
+        <p style="margin: 0 0 1.4em;">3교시 — 어제 배운 거랑 비슷한데 뭐였지. 세션 캐시 관련이었던 것 같음.</p>
+        <p style="margin: 0 0 1.4em;">환경변수는 .env로 분리, git에는 올리지 않기. .gitignore에 .env 꼭 추가.</p>
+        <p style="margin: 0;">실습 — 오늘 과제는 API 설계부터 배포까지 전체 플로우 직접 구현해보기</p>
+      </div>
+
+    </section>
+    <!-- 과거 내용 보는 중 스크롤 시 나타나는 cue (note-scroll 뷰포트 기준 고정) -->
+    <button id="note-jump" onclick="jumpToLive()" style="display: none; position: absolute; bottom: 20px; right: 362px; background: #31333F; color: #FFFFFF; border: none; border-radius: 999px; padding: 7px 16px; font-size: 12.5px; font-weight: 500; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.18); white-space: nowrap; z-index: 10;">↓ 지금 쓰던 곳으로</button>
+
+    <!-- ===== Right: 에이전트 에어리어 (상단 고정 + 하단 독립 스크롤, 필기단과 같은 패턴) ===== -->
+    <aside style="width: 340px; flex-shrink: 0; background: #F0F2F6; border-left: 1px solid #E6E9EF; display: flex; flex-direction: column; min-height: 0; position: relative;">
+
+      <!-- 고정 영역: 현재 상태 + 지금 이 순간의 힌트 -->
+      <div style="flex-shrink: 0; padding: 24px 22px 18px; display: flex; flex-direction: column; gap: 14px; border-bottom: 1px solid #E6E9EF;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <div class="pulse-dot" style="width: 7px; height: 7px; border-radius: 50%; background: #808495;"></div>
+          <span style="font-size: 12px; color: #808495;">조용히 필기를 지켜보는 중</span>
+        </div>
+
+        <div style="background: #FFF4E5; border: 1px solid #FFE0B3; border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px;">
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#B75C00" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2Z"/></svg>
+            <span style="font-size: 12px; font-weight: 700; color: #B75C00;">지금 쓰신 내용에 대해</span>
+          </div>
+          <div style="font-size: 13px; line-height: 1.5; color: #6B4A1F;">"클로저랑 스코프 헷갈림" — 변수 유효범위 기준으로 정리해둔 필기가 있어요.</div>
+        </div>
+      </div>
+
+      <!-- 독립 스크롤 영역: 오늘의 요약 히스토리 (노트패드처럼 위아래로 스크롤) -->
+      <div id="hint-scroll" style="flex-grow: 1; overflow-y: auto; padding: 18px 22px 24px;">
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+          <div style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #808495;">오늘의 요약</div>
+          <div style="background: #FFE8CC; color: #B75C00; font-size: 11px; font-weight: 700; border-radius: 999px; width: 18px; height: 18px; display: flex; align-items: center; justify-content: center;">6</div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+
+          <div style="background: #FFFFFF; border: 1px solid #E6E9EF; border-radius: 8px; padding: 10px 12px; display: flex; gap: 8px; align-items: flex-start;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#FF8700" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-top: 2px; flex-shrink: 0;"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2Z"/></svg>
+            <div style="font-size: 12.5px; line-height: 1.4; color: #31333F;">GitHub Actions workflow — jobs/steps 실행 순서를 정리한 과거 필기가 있어요.</div>
+          </div>
+
+          <div style="background: #FFFFFF; border: 1px solid #E6E9EF; border-radius: 8px; padding: 10px 12px; display: flex; gap: 8px; align-items: flex-start;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#FF8700" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-top: 2px; flex-shrink: 0;"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2Z"/></svg>
+            <div style="font-size: 12.5px; line-height: 1.4; color: #31333F;">pytest fixture 스코프 — 이전 실습 코드에 session/function 예시 있어요.</div>
+          </div>
+
+          <div style="background: #FFFFFF; border: 1px solid #E6E9EF; border-radius: 8px; padding: 10px 12px; display: flex; gap: 8px; align-items: flex-start;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#FF8700" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-top: 2px; flex-shrink: 0;"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2Z"/></svg>
+            <div style="font-size: 12.5px; line-height: 1.4; color: #31333F;">클로저와 스코프 차이 — 변수 유효범위 기준으로 정리해둔 필기 있어요.</div>
+          </div>
+
+          <div style="background: #FFFFFF; border: 1px solid #E6E9EF; border-radius: 8px; padding: 10px 12px; display: flex; gap: 8px; align-items: flex-start;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#FF8700" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-top: 2px; flex-shrink: 0;"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2Z"/></svg>
+            <div style="font-size: 12.5px; line-height: 1.4; color: #31333F;">Docker 멀티스테이지 빌드 — 지난주 Dockerfile 예제랑 거의 동일해요.</div>
+          </div>
+
+          <div style="background: #FFFFFF; border: 1px solid #E6E9EF; border-radius: 8px; padding: 10px 12px; display: flex; gap: 8px; align-items: flex-start;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#FF8700" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-top: 2px; flex-shrink: 0;"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2Z"/></svg>
+            <div style="font-size: 12.5px; line-height: 1.4; color: #31333F;">REST API 리소스 네이밍 — 강의자료 업로드본에 가이드라인 정리돼 있어요.</div>
+          </div>
+
+          <div style="background: #FFFFFF; border: 1px solid #E6E9EF; border-radius: 8px; padding: 10px 12px; display: flex; gap: 8px; align-items: flex-start;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#FF8700" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-top: 2px; flex-shrink: 0;"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2Z"/></svg>
+            <div style="font-size: 12.5px; line-height: 1.4; color: #31333F;">지난주 필기와 비슷한 내용 — 중복 힌트는 건너뛰었어요.</div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- 과거 힌트 보는 중 스크롤 시 나타나는 cue -->
+      <button id="hint-jump" onclick="jumpToLive()" style="display: none; position: absolute; bottom: 20px; right: 20px; background: #31333F; color: #FFFFFF; border: none; border-radius: 999px; padding: 6px 14px; font-size: 12px; font-weight: 500; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.18); white-space: nowrap; z-index: 10;">↓ 최신 힌트로</button>
+
+    </aside>
+
+  </div>
+
+  <!-- ===== Bottom bar: 상태표시 + 애드온 토글 (좌/우 컬럼과 정렬, 각 영역에 관련된 것만 배치) ===== -->
+  <div style="flex-shrink: 0; display: flex; border-top: 1px solid #E6E9EF; background: #FAFAFC;">
+
+    <!-- 왼쪽: 필기 관련 상태/애드온 (노트패드 컬럼과 폭 정렬) -->
+    <div style="flex-grow: 1; min-width: 0; display: flex; align-items: center; gap: 18px; padding: 9px 64px;">
+      <span style="font-size: 12px; color: #808495; flex-shrink: 0;">오늘 11개 필기 · 마지막 저장 3초 전</span>
+      <div style="width: 1px; height: 16px; background: #E6E9EF; flex-shrink: 0;"></div>
+      <label style="display: flex; align-items: center; gap: 7px; cursor: pointer;">
+        <span style="width: 30px; height: 18px; border-radius: 999px; background: #D9DCE3; position: relative; flex-shrink: 0;">
+          <span style="position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #FFFFFF;"></span>
+        </span>
+        <span style="font-size: 12.5px; color: #595F6E;">음성 녹음 연동 (STT)</span>
+      </label>
+    </div>
+
+    <!-- 구분선: 위쪽 패널 경계와 같은 위치 -->
+    <div style="width: 1px; flex-shrink: 0; background: #E6E9EF;"></div>
+
+    <!-- 오른쪽: 에이전트 관련 상태/애드온 (에이전트 패널과 폭 정렬) -->
+    <div style="width: 340px; flex-shrink: 0; display: flex; flex-direction: column; justify-content: center; gap: 7px; padding: 9px 22px;">
+      <span style="font-size: 12px; color: #808495;">오늘 힌트 2개 준비됨</span>
+      <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
+        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+          <span style="width: 28px; height: 17px; border-radius: 999px; background: #D9DCE3; position: relative; flex-shrink: 0;">
+            <span style="position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: #FFFFFF;"></span>
+          </span>
+          <span style="font-size: 12px; color: #595F6E;">퀴즈 생성</span>
+        </label>
+        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+          <span style="width: 28px; height: 17px; border-radius: 999px; background: #D9DCE3; position: relative; flex-shrink: 0;">
+            <span style="position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: #FFFFFF;"></span>
+          </span>
+          <span style="font-size: 12px; color: #595F6E;">자료 추천</span>
+        </label>
+        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+          <span style="width: 28px; height: 17px; border-radius: 999px; background: #D9DCE3; position: relative; flex-shrink: 0;">
+            <span style="position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: #FFFFFF;"></span>
+          </span>
+          <span style="font-size: 12px; color: #595F6E;">개념 그래프</span>
+        </label>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  const noteScroll = document.getElementById('note-scroll');
+  const hintScroll = document.getElementById('hint-scroll');
+  const noteBody = document.getElementById('note-body');
+  const noteJump = document.getElementById('note-jump');
+  const hintJump = document.getElementById('hint-jump');
+  const NEAR_BOTTOM_PX = 40;
+
+  function isNearBottom(el) {
+    return el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
+  }
+
+  function updateJumpCue(el, btn) {
+    btn.style.display = isNearBottom(el) ? 'none' : 'block';
+  }
+
+  function jumpToLive() {
+    // 필기입력모드로 복귀 -> 양쪽 패널을 "지금" 시점(타임스탬프 최신 위치)으로 동기화
+    noteScroll.scrollTo({ top: noteScroll.scrollHeight, behavior: 'smooth' });
+    hintScroll.scrollTo({ top: hintScroll.scrollHeight, behavior: 'smooth' });
+    noteBody.focus();
+  }
+
+  noteScroll.addEventListener('scroll', () => updateJumpCue(noteScroll, noteJump));
+  hintScroll.addEventListener('scroll', () => updateJumpCue(hintScroll, hintJump));
+
+  // 필기창에 다시 포커스/입력이 들어오면(= 필기입력모드 재개) 양쪽 다 최신 위치로 스냅
+  noteBody.addEventListener('focus', jumpToLive);
+  noteBody.addEventListener('input', jumpToLive);
+</script>
+
+</body>
+</html>
