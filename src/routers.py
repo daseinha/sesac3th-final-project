@@ -31,6 +31,14 @@ def compute_routing_decision(state: NoteMateState) -> Literal["tier2", "store_on
 
     if assessment and assessment["is_question"]:
         return "tier2"
+    # is_new_concept은 계산만 되고 라우팅엔 한 번도 안 쓰이고 있었음(2026-10-02,
+    # 6/8일차 리뷰 중 발견 -- CLAUDE.md "라우팅 기준 보강" 변경 이력 참고).
+    # LLM이 명시적으로 "새 개념"이라고 판단했다면 top_score/is_abbreviated와
+    # 무관하게 보강하는 게 맞다고 판단해 여기 추가. session_dup 체크는 이
+    # 조건보다 먼저 와서(위) -- 세션 내에서 방금 다룬 내용이면 "새 개념"
+    # 판단이어도 중복 힌트를 또 만들지 않음(일관성 유지).
+    if assessment and assessment["is_new_concept"]:
+        return "tier2"
     if top_score is not None and top_score < LOW_THRESHOLD:
         return "tier2"
     if (

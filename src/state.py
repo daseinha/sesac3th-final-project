@@ -25,6 +25,11 @@ class NoteMateState(TypedDict):
     note_timestamp: str | None  # ISO 문자열. DB 컬럼명(note_timestamp)과 통일
     origin_ref: str
     session_id: str | None  # 호출하는 쪽이 지정. 세션 경계 판단은 백엔드가 안 함
+    client_line_id: str | None  # 프론트엔드의 필기 "줄" 식별자 -- 같은 줄을 수정해 재제출해도
+    # 같은 값이 유지됨. 파이프라인 판단에는 전혀 안 쓰이고 persist_note가 그대로 저장만 함 --
+    # get_today_notes()가 "오늘 복원 화면"에서 한 줄의 여러 수정본을 중복 표시하지 않고
+    # 최신 것만 고르게 해주는 키(2026-10-02, 새로고침 시 수정 내역이 전부 중복으로
+    # 쌓여 보이던 버그 수정).
 
     # --- 처리 중간 산출물 ---
     embedding: list[float] | None

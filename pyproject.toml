@@ -8,6 +8,7 @@ dependencies = [
     "colorama>=0.4.6",
     "docling>=2.131.0",
     "easyocr>=1.7.2",
+    "fastapi>=0.142.2",
     "kiwipiepy>=0.24.0",
     "langchain>=1.4.2",
     "langchain-community>=0.4.2",
@@ -16,5 +17,7 @@ dependencies = [
     "langgraph-cli[inmem]>=0.4.32",
     "pgvector>=0.5.0",
     "psycopg[binary,pool]>=3.3.6",
+    "python-multipart>=0.0.32",
     "rank-bm25>=0.2.2",
+    "uvicorn[standard]>=0.54.0",
 ]

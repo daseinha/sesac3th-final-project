@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from src.db import log_failed_ingestion, normalize_data_path
+
 # 파일명 앞 8자리 숫자를 그날 날짜로 인식 (예: "20260702 (목) 4회차 수업일지.txt")
 _FILENAME_DATE_RE = re.compile(r"^(\d{8})")
 
@@ -52,6 +54,7 @@ def parse_txt_notes(path: str) -> list[NoteInput]:
     ([잠정] 이전 버전은 "조각마다 [YYYY-MM-DD HH:MM] 인라인 표시"를 가정했는데,
     실제 파일과 달라서 이 버전으로 교체함 -- CLAUDE.md 변경 이력 참고.)
     """
+    origin_path = normalize_data_path(path)
     match = _FILENAME_DATE_RE.match(Path(path).stem)
     current_date = datetime.strptime(match.group(1), "%Y%m%d") if match else None
 
@@ -72,7 +75,7 @@ def parse_txt_notes(path: str) -> list[NoteInput]:
             # 이런 헤더 조각이 경계 구간(top_score 0.7~0.9)에서 Tier2를 낭비시킨
             # 사례의 대부분(62%, 45개 중 28개)이었음. CLAUDE.md 변경 이력 참고.
             continue
-        notes.append(NoteInput(content=paragraph, timestamp=current_date, origin_ref=f"{path}:{i}"))
+        notes.append(NoteInput(content=paragraph, timestamp=current_date, origin_ref=f"{origin_path}:{i}"))
     return notes
 
 
@@ -100,6 +103,7 @@ def parse_document_notes(path: str) -> list[NoteInput]:
     from docling.chunking import HybridChunker
     from docling.document_converter import DocumentConverter, PdfFormatOption
 
+    origin_path = normalize_data_path(path)
     pipeline_options = PdfPipelineOptions()
     pipeline_options.do_ocr = False
     pipeline_options.do_table_structure = False
@@ -117,7 +121,7 @@ def parse_document_notes(path: str) -> list[NoteInput]:
         NoteInput(
             content=chunker.contextualize(chunk),
             timestamp=None,
-            origin_ref=f"{path}:chunk{i}",
+            origin_ref=f"{origin_path}:chunk{i}",
         )
         for i, chunk in enumerate(chunks)
     ]
@@ -166,6 +170,7 @@ def parse_vision_pdf_notes(path: str) -> list[NoteInput]:
             description="본문에서 명확히 식별되는 날짜가 있으면 YYYY-MM-DD 형식으로, 없거나 불확실하면 null",
         )
 
+    origin_path = normalize_data_path(path)
     pdf = pdfium.PdfDocument(path)
     notes: list[NoteInput] = []
 
@@ -195,6 +200,11 @@ def parse_vision_pdf_notes(path: str) -> list[NoteInput]:
             )
         except Exception as e:  # noqa: BLE001 -- 페이지 하나 실패해도 나머지는 계속 처리
             print(f"[page {i}] 실패, 스킵: {type(e).__name__}: {e}")
+            log_failed_ingestion(
+                origin_ref=f"{origin_path}:page{i}",
+                error_type=type(e).__name__,
+                error_message=str(e),
+            )
             continue
 
         if not _has_substantial_content(result.transcription):
@@ -208,7 +218,7 @@ def parse_vision_pdf_notes(path: str) -> list[NoteInput]:
                 pass  # 형식이 안 맞으면 그냥 None으로 둠 -- 임의로 채우지 않음
 
         notes.append(
-            NoteInput(content=result.transcription, timestamp=timestamp, origin_ref=f"{path}:page{i}")
+            NoteInput(content=result.transcription, timestamp=timestamp, origin_ref=f"{origin_path}:page{i}")
         )
 
     return notes

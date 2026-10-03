@@ -129,7 +129,9 @@ def tier2_deep_agent(state: NoteMateState) -> dict:
       - 단기 기억(세션 내 InMemory VectorStore) 검색 -- 아직 세션 개념 없음
       - 원본 드릴다운(origin_ref로 원본 파일 실제 열람) -- 지금은 origin_ref 텍스트만 참고
     """
-    retriever = build_hybrid_retriever(course_id=state.get("course_id"), k=5)
+    retriever = build_hybrid_retriever(
+        course_id=state.get("course_id"), k=5, query_embedding=state.get("embedding")
+    )
     similar_docs = retriever.invoke(state["content"]) if retriever else []
 
     if similar_docs:
@@ -189,6 +191,7 @@ def persist_note(state: NoteMateState) -> dict:
         "routing_decision": state.get("routing_decision"),
         "tier2_result": state.get("tier2_result"),
         "embedding": state.get("embedding"),
+        "client_line_id": state.get("client_line_id"),
     }
     insert_note_chunk(row)
 

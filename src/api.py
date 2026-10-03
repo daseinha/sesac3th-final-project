@@ -27,6 +27,7 @@ def ingest_note(
     course_id: str | None = None,
     timestamp: datetime | None = None,
     session_id: str | None = None,
+    client_line_id: str | None = None,
 ) -> NoteMateState:
     """필기 한 조각을 파이프라인에 투입하고, 처리 완료된 최종 State를 반환한다.
 
@@ -40,6 +41,10 @@ def ingest_note(
         session_id: 세션 내 작업기억(중복 힌트 방지)에 쓸 식별자. 세션 경계는
             호출하는 쪽이 정한다 -- 안 넘기면 세션 기능 없이 동작(기존과 동일).
             세션이 끝나면 end_session(session_id)로 정리해줄 것.
+        client_line_id: 프론트엔드가 매긴 "필기 줄" 식별자. 같은 줄을 고쳐서
+            여러 번 제출해도 같은 값을 넘기면, get_today_notes()가 복원할 때
+            최신 버전 하나만 보여준다(안 넘기면 매번 별개의 줄로 취급됨 --
+            재생 스크립트/업로드처럼 한 번만 제출되는 호출은 그냥 생략하면 됨).
 
     Returns:
         그래프 실행이 끝난 최종 State. routing_decision으로 Tier1/2 여부를,
@@ -53,6 +58,7 @@ def ingest_note(
         "note_timestamp": timestamp.isoformat() if timestamp else None,
         "origin_ref": origin_ref,
         "session_id": session_id,
+        "client_line_id": client_line_id,
     }
     return graph.invoke(initial_state)
 
