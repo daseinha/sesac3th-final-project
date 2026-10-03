@@ -16,6 +16,11 @@
   .pulse-dot { animation: pulse 1.8s ease-in-out infinite; }
   /* 지금 타이핑 중(제출 전)인 줄 -- 살짝 다른 배경으로 구분, 제출되면 사라짐 */
   .typing-active { background: #FFFBEB; border-radius: 4px; box-shadow: 0 0 0 4px #FFFBEB; transition: background 0.2s; }
+  /* 필기 줄 앞 작은 시각 표시 -- textContent에 안 들어가게 ::before로 그린다(제출/삭제 판정이 텍스트를 보므로) */
+  #note-body p:not([contenteditable="false"]) { position: relative; padding-left: 52px; }
+  #note-body p[data-time]::before { content: attr(data-time); position: absolute; left: 0; top: 0.35em; font-size: 11px; color: #808495; opacity: 0.55; font-variant-numeric: tabular-nums; user-select: none; }
+  /* 필기창 전용 연필 커서 -- 뾰족한 끝(3,29)이 클릭 기준점. 페이지 안에서만 보임. */
+  #note-body { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cpath d='M3 29 L5 22 L21 6 L26 11 L10 27 Z' fill='%23FFFFFF' stroke='%2331333F' stroke-width='1.5' stroke-linejoin='round'/%3E%3Cpath d='M19 8 L24 13' stroke='%23FF4B4B' stroke-width='2'/%3E%3C/svg%3E") 3 29, text; }
 </style>
 </head>
 <body>
@@ -263,13 +268,13 @@
     const svg = variant === 'ask' ? askSvg : lightbulbSvg;
     const noteMarker = document.createElement('button');
     noteMarker.innerHTML = svg;
-    noteMarker.title = '이 필기에 대한 코멘트 보기';
+    noteMarker.setAttribute('aria-label', '이 필기에 대한 코멘트 보기');
     noteMarker.style.cssText = 'display:inline-flex; vertical-align:middle; margin-left:6px; padding:2px; background:none; border:none; cursor:pointer; opacity:0.75;';
     node.appendChild(noteMarker);
 
     const agentMarker = document.createElement('button');
     agentMarker.innerHTML = svg;
-    agentMarker.title = '이 필기에 대한 코멘트 보기';
+    agentMarker.setAttribute('aria-label', '이 필기에 대한 코멘트 보기');
     agentMarker.style.cssText = `position:absolute; left:0; top:${node.offsetTop + viewportOffsetDiff()}px; padding:2px; background:none; border:none; cursor:pointer; opacity:0.75;`;
     hintTrack.appendChild(agentMarker);
     // 트랙 높이는 항상 noteBody.scrollHeight를 그대로 따라감(Math.max로 전
@@ -281,7 +286,23 @@
     noteMarker.onclick = (ev) => onClick(ev, noteMarker);
     agentMarker.onclick = (ev) => onClick(ev, agentMarker);
 
-    markerPairs.push({ noteMarker, agentMarker, read: false, variant });
+    [noteMarker, agentMarker].forEach((marker) => {
+      marker.addEventListener('mouseenter', () => {
+        clearTimeout(hoverTimer);
+        hoverTimer = setTimeout(() => {
+          if (openMarker && !hoverPreviewActive) return; // 클릭으로 열린 팝오버는 그대로 둠
+          hoverPreviewActive = true;
+          showHintPopover(marker, text, variant, { preview: true });
+        }, HOVER_PREVIEW_MS);
+      });
+      marker.addEventListener('mouseleave', () => {
+        clearTimeout(hoverTimer);
+        if (hoverPreviewActive && openMarker === marker) closeHintPopover();
+        hoverPreviewActive = false;
+      });
+    });
+
+    markerPairs.push({ noteMarker, agentMarker, read: false, variant, text });
     updateHintBadge();
     // "바로 물어보기"(ask)는 필기 줄이 아니라 즉석 질문이라 "오늘 N줄 중
     // 힌트 M줄" 통계엔 안 넣는다 -- 실제 필기에 달린 넛지만 집계.
@@ -304,22 +325,50 @@
 
   // variant 'hint'(기본, 주황 -- 필기에 대한 조용한 넛지) vs 'ask'(파란색 --
   // "바로 물어보기"로 직접 질문한 것에 대한 답, 성격이 다르니 구별)
-  function showHintPopover(markerEl, text, variant = 'hint') {
-    if (openMarker === markerEl) { closeHintPopover(); return; }
+  // notice: true면 "넛지가 생겼다"는 알림용 자동 펼침 -- 열람으로 세지 않고,
+  // 일정 시간 뒤 스스로 접힌다(2026-10-03, 사용자 요청: 내용 확인용이 아니라 생성 표시용).
+  // 호버 미리보기: 마우스를 올리고 잠시(HOVER_PREVIEW_MS) 머물면 보여주고, 떼면 바로 사라진다.
+  // 열람으로 세지 않고, 클릭으로 열린 팝오버는 건드리지 않는다.
+  const HOVER_PREVIEW_MS = 1000;
+  let hoverTimer = null;
+  let hoverPreviewActive = false;
+
+  function markPairRead(markerEl) {
+    const pair = markerPairs.find((p) => p.noteMarker === markerEl || p.agentMarker === markerEl);
+    if (!pair || pair.read) return;
+    pair.read = true;
+    pair.noteMarker.style.opacity = '0.3';
+    pair.agentMarker.style.opacity = '0.3';
+    pair.noteMarker.setAttribute('aria-label', '열람함 -- 다시 보려면 클릭');
+    pair.agentMarker.setAttribute('aria-label', '열람함 -- 다시 보려면 클릭');
+    updateHintBadge();
+  }
+
+  function showHintPopover(markerEl, text, variant = 'hint', { notice = false, autoCloseMs = 0, preview = false } = {}) {
+    if (openMarker === markerEl) {
+      if (preview) return;
+      // 호버 미리보기 중에 클릭하면 그대로 고정(읽음 처리)하고, 다시 클릭하면 닫는다.
+      if (hoverPreviewActive) { hoverPreviewActive = false; markPairRead(markerEl); return; }
+      closeHintPopover();
+      return;
+    }
     openMarker = markerEl;
+    hintPopover.style.transition = notice ? 'opacity 0.35s ease' : '';
+    hintPopover.style.opacity = '1';
+    if (autoCloseMs) setTimeout(() => {
+      if (openMarker !== markerEl) return;
+      hintPopover.style.opacity = '0';
+      setTimeout(() => {
+        if (openMarker === markerEl) closeHintPopover();
+        hintPopover.style.transition = '';
+        hintPopover.style.opacity = '1';
+      }, 350);
+    }, autoCloseMs);
 
     // 처음 열어본 순간에 "열람"으로 기록 -- 양쪽(필기단/에이전트단) 아이콘을
     // 더 옅게 바꿔서 "이미 확인함"을 시각적으로 구별하고, 배지의 열람 수도
     // 올린다(2026-10-02, "눌러봐도 준비됨 숫자가 안 변한다"는 지적 반영).
-    const pair = markerPairs.find((p) => p.noteMarker === markerEl || p.agentMarker === markerEl);
-    if (pair && !pair.read) {
-      pair.read = true;
-      pair.noteMarker.style.opacity = '0.3';
-      pair.agentMarker.style.opacity = '0.3';
-      pair.noteMarker.title = '열람함 -- 다시 보려면 클릭';
-      pair.agentMarker.title = '열람함 -- 다시 보려면 클릭';
-      updateHintBadge();
-    }
+    if (!notice && !preview) markPairRead(markerEl);
 
     hintPopoverText.textContent = text;
     hintPopoverIcon.innerHTML = variant === 'ask' ? askSvg : lightbulbSvg;
@@ -336,6 +385,18 @@
     }
 
     const markerRect = markerEl.getBoundingClientRect();
+    if (preview) {
+      // 호버 미리보기는 마우스가 올라간 아이콘 바로 옆에 뜬다(에이전트 패널 위치 아님).
+      hintPopover.style.width = '300px';
+      hintPopover.style.display = 'block';
+      const w = hintPopover.offsetWidth;
+      const h = hintPopover.offsetHeight;
+      let left = markerRect.right + 10;
+      if (left + w > window.innerWidth - 8) left = markerRect.left - w - 10;
+      hintPopover.style.left = Math.max(8, left) + 'px';
+      hintPopover.style.top = Math.max(8, Math.min(markerRect.top - h / 2 + 8, window.innerHeight - h - 8)) + 'px';
+      return;
+    }
     const panelRect = agentPanel.getBoundingClientRect();
     hintPopover.style.left = (panelRect.left + 16) + 'px';
     hintPopover.style.width = (panelRect.width - 32) + 'px';
@@ -385,6 +446,48 @@
     summaryPopover.style.display = 'none';
     openSummaryMarker = null;
   }
+
+  // Ctrl 단독 탭: 큐 보기/닫기 토글. Shift 단독 탭: 이전 큐로 이동.
+  // 다른 키나 마우스가 끼면 탭이 아니므로(Ctrl+C, Shift+글자 등) 취소한다.
+  let modifierTapPending = null;
+
+  // Ctrl: 항상 가장 최근 큐(넛지/바로 물어보기 모두)만 대상으로 보기/닫기 토글.
+  // 안 읽은 큐를 고르면 읽고 난 뒤 예전 큐로 뛰어가서, 최신 큐만 고정 대상으로 둔다.
+  function toggleLatestQueue() {
+    const latest = markerPairs[markerPairs.length - 1];
+    if (!latest) return;
+    if (openMarker === latest.noteMarker || openMarker === latest.agentMarker) { closeHintPopover(); return; }
+    showHintPopover(latest.agentMarker, latest.text, latest.variant);
+  }
+
+  function showPreviousQueue() {
+    if (!markerPairs.length) return;
+    const curIdx = openMarker
+      ? markerPairs.findIndex((p) => p.noteMarker === openMarker || p.agentMarker === openMarker)
+      : -1;
+    const prev = markerPairs[curIdx <= 0 ? markerPairs.length - 1 : curIdx - 1];
+    showHintPopover(prev.agentMarker, prev.text, prev.variant);
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (openMarker) closeHintPopover();
+      if (openSummaryMarker) closeSummaryPopover();
+      return;
+    }
+    if (modifierTapPending || e.repeat) { modifierTapPending = null; return; }
+    if (e.key === 'Control' || e.key === 'Shift') modifierTapPending = e.key;
+  });
+
+  document.addEventListener('keyup', (e) => {
+    if (e.key !== modifierTapPending) return;
+    const key = modifierTapPending;
+    modifierTapPending = null;
+    if (key === 'Control') toggleLatestQueue();
+    else showPreviousQueue();
+  });
+
+  document.addEventListener('mousedown', () => { modifierTapPending = null; });
 
   document.addEventListener('click', (e) => {
     if (openSummaryMarker && !summaryPopover.contains(e.target) && e.target !== openSummaryMarker) {
@@ -439,9 +542,11 @@
       // 미리 카운트에 반영해둔다(2026-10-02, 실측된 중복 버그 수정).
       renderedCount++;
       lastSavedAt = new Date();
+      node.dataset.time = formatClock();
       updateNoteStatus();
       if (result.routing_decision === 'tier2' && result.tier2_result) {
-        addMarkerPair(node, result.tier2_result);
+        const { agentMarker } = addMarkerPair(node, result.tier2_result);
+        showHintPopover(agentMarker, result.tier2_result, 'hint', { notice: true, autoCloseMs: 500 });
         setAgentStatus('힌트 하나 작성 완료', { autoReset: true });
       } else {
         setAgentStatus('조용히 확인 완료', { autoReset: true });
@@ -706,6 +811,11 @@
 
   let lastUnitKey; // undefined = 아직 아무 필기도 안 그려짐(첫 블록 라벨도 보여주기 위한 구분)
 
+  function formatClock(iso) {
+    const d = iso ? new Date(iso) : new Date();
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  }
+
   function renderNote(n) {
     const unitKey = noteUnitKey(n.origin_ref);
     if (unitKey !== null && unitKey !== lastUnitKey) insertUnitDivider(unitKey, lastUnitKey);
@@ -724,8 +834,9 @@
     // 또 고쳐서 재제출해도(submitNote) 같은 줄로 계속 인식되어야, 새로고침을
     // 여러 번 거쳐도 중복 없이 "최신 버전 하나"만 남는다(2026-10-02).
     if (n.client_line_id) p.dataset.lineId = n.client_line_id;
+    p.dataset.time = formatClock(n.created_at);
     noteBody.appendChild(p);
-    if (n.tier2_result) addMarkerPair(p, n.tier2_result);
+    return n.tier2_result ? { ...addMarkerPair(p, n.tier2_result), text: n.tier2_result } : null;
   }
 
   let renderedCount = 0;
@@ -785,10 +896,16 @@
     const notes = await res.json();
     if (notes.length > renderedCount) {
       const newNotes = notes.slice(renderedCount);
-      newNotes.forEach(renderNote);
+      let latestPair = null;
+      newNotes.forEach((n) => { const pair = renderNote(n); if (pair) latestPair = pair; });
       renderedCount = notes.length;
       lastSavedAt = new Date();
       updateNoteStatus();
+      // 한 번에 여러 줄이 들어와도 알림은 가장 최근 넛지 하나만 펼친다 -- 여러 개를
+      // 동시에 펼치면 화면이 겹침(2026-10-03).
+      if (latestPair) {
+        showHintPopover(latestPair.agentMarker, latestPair.text, 'hint', { notice: true, autoCloseMs: 500 });
+      }
 
       // submitNote()는 브라우저에서 직접 타이핑했을 때만 타는 경로라, 재생
       // 스크립트처럼 외부에서 바로 DB에 넣은 필기는 폴링으로만 화면에
