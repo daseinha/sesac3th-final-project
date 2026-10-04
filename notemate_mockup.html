@@ -353,7 +353,7 @@
       return;
     }
     openMarker = markerEl;
-    hintPopover.style.transition = notice ? 'opacity 0.35s ease' : '';
+    hintPopover.style.transition = notice ? 'opacity 0.5s ease' : '';
     hintPopover.style.opacity = '1';
     if (autoCloseMs) setTimeout(() => {
       if (openMarker !== markerEl) return;
@@ -362,7 +362,7 @@
         if (openMarker === markerEl) closeHintPopover();
         hintPopover.style.transition = '';
         hintPopover.style.opacity = '1';
-      }, 350);
+      }, 500);
     }, autoCloseMs);
 
     // 처음 열어본 순간에 "열람"으로 기록 -- 양쪽(필기단/에이전트단) 아이콘을
