@@ -12,28 +12,41 @@
 이어지므로, 같은 프로세스 안에서 여러 번 호출해서 테스트해야 한다.
 """
 
+import time
+
 from src.db import log_session_event
 
-_session_stores: dict[str, list[list[float]]] = {}
+# (임베딩, 저장된 시각) 쌍으로 저장 -- 2026-10-05, "같은 질문을 한참 뒤에 다시
+# 적었으면 중복이 아니라 재질문일 수 있다"는 리뷰 피드백 반영. 세션 내 중복이어도
+# 경과 시간이 길면(routers.py의 SESSION_DUP_REALLOW_SECONDS) 억제를 풀어주기
+# 위해 "언제" 다뤘는지도 같이 기억해야 함.
+_session_stores: dict[str, list[tuple[list[float], float]]] = {}
 
 
 def add_to_session(session_id: str, embedding: list[float]) -> None:
-    """이 세션의 작업기억에 필기 하나(임베딩)를 추가."""
-    _session_stores.setdefault(session_id, []).append(embedding)
+    """이 세션의 작업기억에 필기 하나(임베딩+시각)를 추가."""
+    _session_stores.setdefault(session_id, []).append((embedding, time.time()))
     log_session_event(session_id, "note_added", note_count=len(_session_stores[session_id]))
 
 
-def check_session_duplicate(session_id: str, embedding: list[float]) -> float | None:
-    """이 세션에서 이미 다룬 내용과 얼마나 비슷한지(코사인 유사도 최댓값)를 반환.
+def check_session_duplicate(session_id: str, embedding: list[float]) -> tuple[float | None, float | None]:
+    """이 세션에서 이미 다룬 내용과 얼마나 비슷한지(최댓값)와, 그 가장 비슷했던
+    순간으로부터 몇 초가 지났는지를 함께 반환.
 
-    세션이 아직 없거나(첫 필기) 비어있으면 None -- "비교할 게 없다"는 뜻이라
-    assess_note의 top_score와 달리 여기선 0.0으로 대체하지 않는다(중복
+    세션이 아직 없거나(첫 필기) 비어있으면 (None, None) -- "비교할 게 없다"는
+    뜻이라 assess_note의 top_score와 달리 여기선 0.0으로 대체하지 않는다(중복
     여부를 판단하는 신호라, "모른다"와 "안 겹친다"는 다른 의미이므로).
     """
     stored = _session_stores.get(session_id)
     if not stored:
-        return None
-    return max(_cosine_similarity(embedding, e) for e in stored)
+        return None, None
+    now = time.time()
+    best_sim, best_elapsed = -1.0, None
+    for e, ts in stored:
+        sim = _cosine_similarity(embedding, e)
+        if sim > best_sim:
+            best_sim, best_elapsed = sim, now - ts
+    return best_sim, best_elapsed
 
 
 def end_session(session_id: str) -> None:

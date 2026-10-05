@@ -36,6 +36,9 @@ class NoteMateState(TypedDict):
     top_score: float | None  # 신호 A: 벡터 검색 최고 유사도
     assessment: NoteAssessment | None  # 신호 B: LLM 구조화 출력
     session_duplicate_score: float | None  # 세션 내 작업기억 중복 검사 결과
+    session_duplicate_elapsed_seconds: float | None  # 그 중복과의 경과 시간(초) --
+    # 라우팅 판단(15분 예외)에만 쓰는 임시 필드. DB 컬럼 없음 -- persist_note가
+    # 저장하지 않음(2026-10-05, session_duplicate_score만 판단 로그로 남기기로 함).
 
     # --- 라우팅 결과 ---
     routing_decision: Literal["tier2", "store_only"] | None

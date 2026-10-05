@@ -10,6 +10,7 @@ nodes.py의 decide_routing 노드가 담당한다. `route()`는 그 노드가 �
 State에 저장해둔 값을 그대로 읽어서 다음 노드만 골라준다.
 """
 
+import os
 from typing import Literal
 
 from src.state import NoteMateState
@@ -17,6 +18,10 @@ from src.state import NoteMateState
 LOW_THRESHOLD = 0.75  # [잠정] 재생 테스트로 튜닝 예정
 HIGH_THRESHOLD = 0.85  # [잠정] 재생 테스트로 튜닝 예정
 SESSION_DUPLICATE_THRESHOLD = 0.85  # [잠정] 세션 내 중복 판정 기준 -- 실데이터 튜닝 필요
+# 세션 내 중복이어도 이만큼 시간이 지났으면 억제를 풀어준다(2026-10-05, 리뷰
+# 피드백 "같은 질문을 한참 뒤 다시 적었으면 중복이 아니라 재질문일 수 있다"
+# 반영). .env로 덮어쓸 수 있게 해서 발표 시연 때는 짧게 줄일 수 있음.
+SESSION_DUP_REALLOW_SECONDS = int(os.environ.get("SESSION_DUP_REALLOW_SECONDS", str(15 * 60)))
 
 
 def compute_routing_decision(state: NoteMateState) -> Literal["tier2", "store_only"]:
@@ -25,8 +30,16 @@ def compute_routing_decision(state: NoteMateState) -> Literal["tier2", "store_on
 
     # 세션 내에서 방금 다룬 내용과 거의 같으면, 질문이든 뭐든 상관없이 중복
     # 힌트를 만들지 않는다 (CLAUDE.md 6번 섹션 "용도1" -- 이미 방금 도와줬으므로).
+    # 단, 그 "방금"이 SESSION_DUP_REALLOW_SECONDS보다 오래 전이면 억제를 풀어준다
+    # -- 한참 지나 똑같은 내용을 또 썼다는 건 "중복"이 아니라 "아직도 이해가
+    # 안 돼서 다시 물어보는 것"일 수 있어서(2026-10-05).
     session_dup = state.get("session_duplicate_score")
-    if session_dup is not None and session_dup >= SESSION_DUPLICATE_THRESHOLD:
+    session_dup_elapsed = state.get("session_duplicate_elapsed_seconds")
+    if (
+        session_dup is not None
+        and session_dup >= SESSION_DUPLICATE_THRESHOLD
+        and (session_dup_elapsed is None or session_dup_elapsed <= SESSION_DUP_REALLOW_SECONDS)
+    ):
         return "store_only"
 
     if assessment and assessment["is_question"]:

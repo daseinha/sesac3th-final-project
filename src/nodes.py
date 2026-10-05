@@ -28,11 +28,23 @@ class _NoteAssessmentSchema(BaseModel):
     )
 
 
+# _ABBREVIATED_WORD_GUARD 이상이면 is_abbreviated를 LLM 판단과 무관하게 False로
+# 강제한다(2026-10-05, 57일 전체 재검토 -- is_abbreviated가 전체의 70%에서
+# True로 찍혀서 거의 상시 켜져 있었음). 문장부호 유무는 가드 조건에서 제외함
+# -- "※n8n도 서버다." 처럼 문장부호가 있어도 진짜 축약인 사례가 있어서,
+# 그 기준을 쓰면 실제 축약 메모를 놓침. 어절 수만 기준으로 삼는다.
+_ABBREVIATED_WORD_GUARD = 5
+
 _ASSESSMENT_SYSTEM_PROMPT = (
     "당신은 학습자의 실시간 필기를 분석하는 어시스턴트입니다. "
     "주어진 필기 한 조각을 보고 아래 세 가지를 판단하세요.\n"
     "1. is_question: 명시적인 질문을 담고 있는가\n"
     "2. is_abbreviated: 축약이 심해 나중에 봤을 때 이해하기 어려운가\n"
+    "   - 아닌 예(False로 판단할 것): 완결된 개조식 문장. 예: \"CASE문은 조건별 분기 처리 시 사용\", "
+    "\"nvm은 Node.js 버전 매니저의 약자로, 여러 버전을 설치해 선택적으로 쓸 수 있게 해준다\". "
+    "서술어가 명사형으로 끝나거나 조사가 생략돼도, 의미가 완결돼 있으면 축약이 아님.\n"
+    "   - 맞는 예(True로 판단할 것): \"※n8n도 서버다.\"처럼 짧고 핵심만 적어서 전후 맥락 없이는 "
+    "무슨 뜻인지 추측이 필요한 메모, 단어나 구만 덩그러니 적힌 경우.\n"
     "3. is_new_concept: 새로운 개념을 다루는가\n"
     "필기 원문 외의 맥락은 알 수 없으니, 주어진 텍스트만 보고 판단하세요."
 )
@@ -59,8 +71,8 @@ def assess_note(state: NoteMateState) -> dict:
     top_score = raw_top_score if raw_top_score is not None else 0.0
 
     session_id = state.get("session_id")
-    session_duplicate_score = (
-        check_session_duplicate(session_id, embedding) if session_id else None
+    session_duplicate_score, session_duplicate_elapsed_seconds = (
+        check_session_duplicate(session_id, embedding) if session_id else (None, None)
     )
 
     result: _NoteAssessmentSchema = invoke_structured(
@@ -71,9 +83,16 @@ def assess_note(state: NoteMateState) -> dict:
         ],
         purpose="assess_note_assessment",
     )
+    # 어절 수 가드레일: 일정 길이 이상이면 LLM이 True로 판단했어도 축약이 아닌
+    # 것으로 강제한다 -- 긴 완결 문장까지 축약으로 과잉판정되는 걸 막는 결정론적
+    # 1차 필터(위 _ABBREVIATED_WORD_GUARD 주석 참고).
+    is_abbreviated = result.is_abbreviated
+    if len(content.split()) >= _ABBREVIATED_WORD_GUARD:
+        is_abbreviated = False
+
     assessment: NoteAssessment = {
         "is_question": result.is_question,
-        "is_abbreviated": result.is_abbreviated,
+        "is_abbreviated": is_abbreviated,
         "is_new_concept": result.is_new_concept,
     }
 
@@ -82,6 +101,7 @@ def assess_note(state: NoteMateState) -> dict:
         "top_score": top_score,
         "assessment": assessment,
         "session_duplicate_score": session_duplicate_score,
+        "session_duplicate_elapsed_seconds": session_duplicate_elapsed_seconds,
     }
 
 
