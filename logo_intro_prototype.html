@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>LY:OL 로고 인트로 프로토타입</title>
+<style>
+  /* 종이 질감 크림 배경 + 검정 선 로고. 원본 로고 톤에 맞춤 */
+  :root {
+    --paper: #efeadf;
+    --ink: #1c1c1c;
+  }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--paper);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    font-family: system-ui, -apple-system, 'Malgun Gothic', sans-serif;
+  }
+  svg.logo {
+    width: min(80vw, 640px);
+    height: auto;
+    overflow: visible;
+  }
+  svg.logo .s {
+    fill: none;
+    stroke: var(--ink);
+    stroke-width: 4;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1; /* 재생 전엔 숨김 */
+  }
+  svg.logo .dot { fill: var(--ink); opacity: 0; }
+  svg.logo .tag {
+    fill: var(--ink);
+    font-size: 15px;
+    letter-spacing: 0.32em;
+    font-weight: 600;
+    text-anchor: middle;
+    opacity: 0;
+  }
+  /* 재생 시작 후 각 요소가 순서대로 그려짐 (총 10초, 마지막 자막까지) */
+  svg.logo.play .s {
+    animation: draw 0.9s ease forwards;
+  }
+  svg.logo.play .dot {
+    animation: pop 0.4s ease forwards;
+  }
+  svg.logo.play .tag {
+    animation: fade 1.4s ease 8.4s forwards;
+  }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+  @keyframes pop  { to { opacity: 1; } }
+  @keyframes fade { to { opacity: 1; } }
+
+  /* 개별 시작 시각 */
+  .t-l1       { animation-delay: 0.0s !important; }
+  .t-l1-in    { animation-delay: 0.3s !important; }
+  .t-yarm     { animation-delay: 1.2s !important; }
+  .t-pencil   { animation-delay: 2.0s !important; }
+  .t-brain    { animation-delay: 3.0s !important; }
+  .t-bulb     { animation-delay: 4.0s !important; }
+  .t-rays     { animation-delay: 4.6s !important; }
+  .t-colon    { animation-delay: 5.2s !important; }
+  .t-o        { animation-delay: 5.6s !important; }
+  .t-l2       { animation-delay: 6.8s !important; }
+  .d-colon1   { animation-delay: 5.3s !important; }
+  .d-colon2   { animation-delay: 5.5s !important; }
+
+  button.replay {
+    border: 1.5px solid var(--ink);
+    background: transparent;
+    color: var(--ink);
+    padding: 8px 16px;
+    border-radius: 999px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    svg.logo.play .s, svg.logo.play .dot, svg.logo.play .tag { animation: none; }
+    svg.logo .s { stroke-dashoffset: 0; }
+    svg.logo .dot, svg.logo .tag { opacity: 1; }
+  }
+</style>
+</head>
+<body>
+
+<svg class="logo play" id="logo" viewBox="0 0 480 240" role="img" aria-label="LY:OL 로고">
+  <!-- L (이중선) -->
+  <path class="s t-l1" pathLength="1" d="M40 70 V180 H110"/>
+  <path class="s t-l1-in" pathLength="1" d="M52 82 V168 H110"/>
+
+  <!-- Y 왼쪽 팔 -->
+  <path class="s t-yarm" pathLength="1" d="M120 70 L152 128"/>
+  <!-- 연필 몸통(Y 오른쪽 팔) + 끝 -->
+  <path class="s t-pencil" pathLength="1" d="M184 70 L196 70 L162 150 L150 150 Z"/>
+  <path class="s t-pencil" pathLength="1" d="M150 150 L156 176 L162 150"/>
+  <!-- Y 줄기 -->
+  <path class="s t-yarm" pathLength="1" d="M152 128 L150 150"/>
+
+  <!-- 뇌 (왼쪽 위) -->
+  <path class="s t-brain" pathLength="1" d="M112 56 Q106 40 122 36 Q132 22 146 30 Q160 34 156 48 Q162 60 148 64 Q138 74 124 66 Q108 68 112 56 Z"/>
+
+  <!-- 전구 (오른쪽 위) -->
+  <circle class="s t-bulb" pathLength="1" cx="196" cy="44" r="12"/>
+  <path class="s t-bulb" pathLength="1" d="M190 58 H202 M191 62 H201"/>
+  <path class="s t-rays" pathLength="1" d="M196 22 V16 M208 26 L213 21 M184 26 L179 21"/>
+
+  <!-- 콜론 -->
+  <circle class="dot d-colon1" cx="222" cy="130" r="4"/>
+  <circle class="dot d-colon2" cx="222" cy="150" r="4"/>
+
+  <!-- O -->
+  <circle class="s t-o" pathLength="1" cx="300" cy="125" r="55"/>
+
+  <!-- L (오른쪽) -->
+  <path class="s t-l2" pathLength="1" d="M375 70 V180 H440"/>
+
+  <!-- 자막 -->
+  <text class="tag" x="240" y="218">LOG YOUR OWN LOG</text>
+</svg>
+
+<button class="replay" id="replay">다시 보기</button>
+
+<script>
+  // 재생 버튼: 클래스를 뺐다 다시 넣어서 애니메이션을 처음부터 실행
+  const svg = document.getElementById('logo');
+  document.getElementById('replay').addEventListener('click', () => {
+    svg.classList.remove('play');
+    void svg.getBoundingClientRect(); // 리플로우 강제
+    svg.classList.add('play');
+  });
+</script>
+</body>
+</html>
