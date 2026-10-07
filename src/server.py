@@ -9,6 +9,7 @@
 서빙까지 같이 담당한다 -- 같은 출처(origin)라 CORS 설정이 필요 없다.
 """
 
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -28,8 +29,18 @@ from src.summarize import generate_day_summary
 _DEFAULT_COURSE_ID = "sesac_bootcamp"
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _MOCKUP_PATH = _PROJECT_ROOT / "notemate_mockup.html"
+# 힌트 피드백 기록 (2026-10-07 결정: 1단계는 로그 파일로만 쌓고, 라우팅에는 연결하지 않음).
+# 사이클 테스트 후 DB 테이블로 옮기고 라우터에 연결해서 평가한다.
+_HINT_FEEDBACK_LOG = _PROJECT_ROOT / "data" / "hint_feedback_log.jsonl"
+_FEEDBACK_VALUES = {"+", "−", "-", "✓"}
 
 app = FastAPI(title="NoteMate API")
+
+
+def _append_hint_event(record: dict) -> None:
+    _HINT_FEEDBACK_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(_HINT_FEEDBACK_LOG, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
 @app.get("/")
@@ -74,12 +85,48 @@ def api_ingest_note(
         session_id=session_id,
         client_line_id=client_line_id,
     )
+    if state.get("tier2_result"):
+        # 노출(shown) 기록: 힌트가 실제로 만들어져 화면에 전달된 순간. 분모 용도.
+        _append_hint_event({
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "event_type": "shown",
+            "course_id": course_id,
+            "session_id": session_id,
+            "origin_prefix": origin_prefix,
+            "client_line_id": client_line_id,
+            "hint_text": state.get("tier2_result"),
+            "top_score": state.get("top_score"),
+            "routing_decision": state.get("routing_decision"),
+        })
     return {
         "routing_decision": state.get("routing_decision"),
         "top_score": state.get("top_score"),
         "is_question": state.get("is_question"),
         "tier2_result": state.get("tier2_result"),
     }
+
+
+@app.post("/api/hint_feedback")
+def api_hint_feedback(
+    course_id: str = Form(_DEFAULT_COURSE_ID),
+    session_id: str = Form(...),
+    hint_text: str = Form(...),
+    value: str = Form(...),
+    kind: str = Form("hint"),
+) -> dict:
+    """힌트(hint) 또는 바로 물어보기 답변(ask)의 버튼(+ / − / ✓) 클릭을 기록한다. 라우팅에는 연결하지 않는다."""
+    if value not in _FEEDBACK_VALUES:
+        return {"ok": False, "error": "unknown value"}
+    _append_hint_event({
+        "ts": datetime.now().isoformat(timespec="seconds"),
+        "event_type": "feedback",
+        "kind": kind if kind in ("hint", "ask") else "hint",
+        "course_id": course_id,
+        "session_id": session_id,
+        "value": value,
+        "hint_text": hint_text,
+    })
+    return {"ok": True}
 
 
 @app.post("/api/ingest_file")

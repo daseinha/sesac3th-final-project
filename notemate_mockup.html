@@ -7,19 +7,79 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
+  /* 색상 토큰 (2026-10-07) -- 테마 전환(라이트/다크) 준비를 위해 하드코딩된 색 값을
+     전부 변수로 뺀 것. 지금은 라이트 테마 값만 있고, 실제 전환 버튼/다크 팔레트는
+     다음 단계에서 추가([[deferred-color-theme-feature]]). 값 자체는 기존과 완전히
+     동일해서 화면은 바뀌지 않음 -- 이건 순수 리팩터링. */
+  :root {
+    --color-surface: #FFFFFF;
+    --color-ink: #31333F;
+    --color-text-muted: #808495;
+    --color-text-secondary: #595F6E;
+    --color-border: #E6E9EF;
+    --color-border-input: #D3D3D3;
+    --color-border-dashed: #C7CBD4;
+    --color-surface-muted: #F0F2F6;
+    --color-surface-subtle: #F7F8FA;
+    --color-surface-bottom: #FAFAFC;
+    --color-icon-disabled: #ABB1BF;
+    --color-accent: #FF4B4B;
+    --color-typing-bg: #FFFBEB;
+
+    --color-success-bg: #E8F8EC;
+    --color-success: #21C354;
+    --color-success-text: #1A7A37;
+
+    --color-badge-bg: #FFE8CC;
+    --color-badge-text: #B75C00;
+
+    --color-hint-bg: #FFF4E5;
+    --color-hint-border: #FFE0B3;
+    --color-hint-text: #6B4A1F;
+    --color-hint-icon: #FF8700;
+
+    --color-ask-bg: #EFF6FF;
+    --color-ask-border: #BFDBFE;
+    --color-ask-text: #1E3A8A;
+    --color-ask-accent: #2563EB;
+
+    --color-neutral-300: #D9DCE3;
+
+    --color-feedback-plus-bg: #DCEFE3;
+    --color-feedback-plus-ink: #2E6B47;
+    --color-feedback-minus-bg: #F6DDDA;
+    --color-feedback-minus-ink: #8A3A33;
+    --color-feedback-check-bg: #DCE6F4;
+    --color-feedback-check-ink: #2E4F7C;
+
+    --color-danger: #C0392B;
+
+    --color-review-bg: #ECFDF5;
+    --color-review-border: #A7F3D0;
+    --color-review-text: #065F46;
+
+    --shadow-dropdown: 0 6px 20px rgba(0,0,0,0.08);
+    --shadow-float: 0 2px 8px rgba(0,0,0,0.18);
+    --shadow-popover: 0 4px 16px rgba(0,0,0,0.12);
+    --shadow-popover-strong: 0 4px 16px rgba(0,0,0,0.14);
+    --outline-selected: 2px solid rgba(0,0,0,0.35);
+  }
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; font-family: 'Source Sans 3', -apple-system, BlinkMacSystemFont, sans-serif; background: #FFFFFF; color: #31333F; }
-  ::placeholder { color: #808495; }
+  html, body { margin: 0; height: 100%; font-family: 'Source Sans 3', -apple-system, BlinkMacSystemFont, sans-serif; background: var(--color-surface); color: var(--color-ink); }
+  ::placeholder { color: var(--color-text-muted); }
   @keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
-  .cursor { display: inline-block; width: 2px; height: 1.1em; background: #31333F; vertical-align: text-bottom; animation: blink 1s step-start infinite; margin-left: 2px; }
+  .cursor { display: inline-block; width: 2px; height: 1.1em; background: var(--color-ink); vertical-align: text-bottom; animation: blink 1s step-start infinite; margin-left: 2px; }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
   .pulse-dot { animation: pulse 1.8s ease-in-out infinite; }
   /* 지금 타이핑 중(제출 전)인 줄 -- 살짝 다른 배경으로 구분, 제출되면 사라짐 */
-  .typing-active { background: #FFFBEB; border-radius: 4px; box-shadow: 0 0 0 4px #FFFBEB; transition: background 0.2s; }
+  .typing-active { background: var(--color-typing-bg); border-radius: 4px; box-shadow: 0 0 0 4px var(--color-typing-bg); transition: background 0.2s; }
   /* 필기 줄 앞 작은 시각 표시 -- textContent에 안 들어가게 ::before로 그린다(제출/삭제 판정이 텍스트를 보므로) */
   #note-body p:not([contenteditable="false"]) { position: relative; padding-left: 52px; }
-  #note-body p[data-time]::before { content: attr(data-time); position: absolute; left: 0; top: 0.35em; font-size: 11px; color: #808495; opacity: 0.55; font-variant-numeric: tabular-nums; user-select: none; }
-  /* 필기창 전용 연필 커서 -- 뾰족한 끝(3,29)이 클릭 기준점. 페이지 안에서만 보임. */
+  #note-body p[data-time]::before { content: attr(data-time); position: absolute; left: 0; top: 0.35em; font-size: 11px; color: var(--color-text-muted); opacity: 0.55; font-variant-numeric: tabular-nums; user-select: none; }
+  /* 필기창 전용 연필 커서 -- 뾰족한 끝(3,29)이 클릭 기준점. 페이지 안에서만 보임.
+     주의(2026-10-07): 이 안의 두 색(흰색 테두리, 잉크색 선)은 data-URI 안에 박혀있어
+     var()로 못 뺀다 -- 다크모드 작업 때는 이 cursor 값 전체를 테마별로 다르게 둔
+     --cursor-pencil 변수로 감싸서 교체하는 방식이 필요함([[deferred-color-theme-feature]]). */
   #note-body { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cpath d='M3 29 L5 22 L21 6 L26 11 L10 27 Z' fill='%23FFFFFF' stroke='%2331333F' stroke-width='1.5' stroke-linejoin='round'/%3E%3Cpath d='M19 8 L24 13' stroke='%23FF4B4B' stroke-width='2'/%3E%3C/svg%3E") 3 29, text; }
 </style>
 </head>
@@ -28,34 +88,44 @@
 <div style="display: flex; flex-direction: column; width: 100%; height: 100vh;">
 
   <!-- ===== Top bar ===== -->
-  <div style="flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 16px 32px; border-bottom: 1px solid #E6E9EF;">
+  <div style="flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 16px 32px; border-bottom: 1px solid var(--color-border);">
     <div style="display: flex; align-items: center; gap: 16px;">
       <div style="display: flex; align-items: center; gap: 10px;">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FF4B4B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
         <span style="font-size: 18px; font-weight: 700;">노트메이트</span>
       </div>
-      <div style="width: 1px; height: 20px; background: #E6E9EF;"></div>
-      <div style="display: flex; align-items: center; gap: 6px; background: #F0F2F6; border-radius: 6px; padding: 6px 10px 6px 12px; cursor: pointer;">
-        <span style="font-size: 13.5px; color: #31333F;">SeSac 3기 과정</span>
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#808495" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      <div style="width: 1px; height: 20px; background: var(--color-border);"></div>
+      <div id="course-chip" style="position: relative;">
+        <div id="course-btn" role="button" tabindex="0" aria-haspopup="listbox" aria-expanded="false" style="display: flex; align-items: center; gap: 6px; background: var(--color-surface-muted); border-radius: 6px; padding: 6px 10px 6px 12px; cursor: pointer; user-select: none;">
+          <span id="course-btn-text" style="font-size: 13.5px; color: var(--color-ink);">SeSac 3기 과정</span>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-muted)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div id="course-menu" role="listbox" style="display: none; position: absolute; top: calc(100% + 6px); left: 0; min-width: 240px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 10px; box-shadow: var(--shadow-dropdown); padding: 6px; z-index: 40;">
+          <div id="course-list"></div>
+          <div style="border-top: 1px solid var(--color-border); margin: 6px 0 4px;"></div>
+          <div style="display: flex; gap: 6px; padding: 4px;">
+            <input id="course-new-name" type="text" placeholder="새 과목 이름" maxlength="40" style="flex: 1; min-width: 0; border: 1px solid var(--color-border-input); border-radius: 6px; padding: 6px 8px; font-size: 13px; font-family: inherit;">
+            <button id="course-add-btn" type="button" style="border: 1px solid var(--color-border-input); background: var(--color-surface); border-radius: 6px; padding: 6px 10px; font-size: 13px; cursor: pointer; color: var(--color-ink);">추가</button>
+          </div>
+        </div>
       </div>
     </div>
     <div style="display: flex; align-items: center; gap: 14px;">
       <div style="display: flex; align-items: center; gap: 8px;">
         <!-- 선택/업로드된 파일 상태 필드 -- 비어있을 땐 "선택된 파일 없음"(회색), 선택되면 파일명+상태 칩으로 바뀜 -->
-        <div id="file-status" style="display: flex; align-items: center; gap: 6px; background: #F7F8FA; border: 1px solid #E6E9EF; border-radius: 6px; padding: 6px 10px; font-size: 12.5px; max-width: 220px;">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#ABB1BF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-          <span id="file-status-text" style="color: #ABB1BF; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">선택된 파일 없음</span>
+        <div id="file-status" style="display: flex; align-items: center; gap: 6px; background: var(--color-surface-subtle); border: 1px solid var(--color-border); border-radius: 6px; padding: 6px 10px; font-size: 12.5px; max-width: 220px;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--color-icon-disabled)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          <span id="file-status-text" style="color: var(--color-icon-disabled); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">선택된 파일 없음</span>
         </div>
-        <button id="upload-btn" style="display: flex; align-items: center; gap: 7px; background: #FFFFFF; border: 1px solid #D3D3D3; border-radius: 8px; padding: 7px 14px; font-size: 13px; font-weight: 500; color: #31333F; cursor: pointer; flex-shrink: 0;">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#31333F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        <button id="upload-btn" style="display: flex; align-items: center; gap: 7px; background: var(--color-surface); border: 1px solid var(--color-border-input); border-radius: 8px; padding: 7px 14px; font-size: 13px; font-weight: 500; color: var(--color-ink); cursor: pointer; flex-shrink: 0;">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--color-ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
           자료 업로드
         </button>
         <input id="file-input" type="file" style="display: none;">
       </div>
-      <div style="display: flex; align-items: center; gap: 7px; background: #E8F8EC; border-radius: 999px; padding: 5px 14px 5px 10px;">
-        <div style="width: 8px; height: 8px; border-radius: 50%; background: #21C354;"></div>
-        <span style="font-size: 13px; font-weight: 500; color: #1A7A37;">세션 진행 중</span>
+      <div style="display: flex; align-items: center; gap: 7px; background: var(--color-success-bg); border-radius: 999px; padding: 5px 14px 5px 10px;">
+        <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--color-success);"></div>
+        <span style="font-size: 13px; font-weight: 500; color: var(--color-success-text);">세션 진행 중</span>
       </div>
     </div>
   </div>
@@ -68,23 +138,23 @@
         id="note-body"
         contenteditable="true"
         spellcheck="false"
-        style="max-width: 680px; min-height: 100%; font-size: 16px; line-height: 2; color: #31333F; outline: none; caret-color: #FF4B4B;"
+        style="max-width: 680px; min-height: 100%; font-size: 16px; line-height: 2; color: var(--color-ink); outline: none; caret-color: var(--color-accent);"
       ></div>
 
     </section>
     <!-- 과거 내용 보는 중 스크롤 시 나타나는 cue (note-scroll 뷰포트 기준 고정) -->
-    <button id="note-jump" onclick="jumpToLive()" style="display: none; position: absolute; bottom: 20px; right: 430px; background: #31333F; color: #FFFFFF; border: none; border-radius: 999px; padding: 7px 16px; font-size: 12.5px; font-weight: 500; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.18); white-space: nowrap; z-index: 10;">↓ 지금 쓰던 곳으로</button>
+    <button id="note-jump" onclick="jumpToLive()" style="display: none; position: absolute; bottom: 20px; right: 430px; background: var(--color-ink); color: var(--color-surface); border: none; border-radius: 999px; padding: 7px 16px; font-size: 12.5px; font-weight: 500; cursor: pointer; box-shadow: var(--shadow-float); white-space: nowrap; z-index: 10;">↓ 지금 쓰던 곳으로</button>
 
     <!-- ===== Right: 에이전트 에어리어 (상단 고정 + 하단 독립 스크롤, 필기단과 같은 패턴) ===== -->
-    <aside id="agent-panel" style="width: 408px; flex-shrink: 0; background: #F0F2F6; border-left: 1px solid #E6E9EF; display: flex; flex-direction: column; min-height: 0; position: relative;">
+    <aside id="agent-panel" style="width: 408px; flex-shrink: 0; background: var(--color-surface-muted); border-left: 1px solid var(--color-border); display: flex; flex-direction: column; min-height: 0; position: relative;">
 
       <!-- 고정 영역: 상태 + 오늘 배지 (내용 미리보기 없음, 숫자만) -->
-      <div style="flex-shrink: 0; padding: 20px 22px 14px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #E6E9EF;">
+      <div style="flex-shrink: 0; padding: 20px 22px 14px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--color-border);">
         <div style="display: flex; align-items: center; gap: 8px;">
-          <div class="pulse-dot" style="width: 7px; height: 7px; border-radius: 50%; background: #808495;"></div>
-          <span id="agent-status" style="font-size: 12px; color: #808495;">조용히 필기를 지켜보는 중</span>
+          <div class="pulse-dot" style="width: 7px; height: 7px; border-radius: 50%; background: var(--color-text-muted);"></div>
+          <span id="agent-status" style="font-size: 12px; color: var(--color-text-muted);">조용히 필기를 지켜보는 중</span>
         </div>
-        <div id="hint-count-badge" style="background: #FFE8CC; color: #B75C00; font-size: 11px; font-weight: 700; border-radius: 999px; padding: 2px 9px; flex-shrink: 0;">0개 준비됨</div>
+        <div id="hint-count-badge" style="background: var(--color-badge-bg); color: var(--color-badge-text); font-size: 11px; font-weight: 700; border-radius: 999px; padding: 2px 9px; flex-shrink: 0;">0개 준비됨</div>
       </div>
 
       <!-- 필기단과 스크롤이 함께 움직이는 트랙. 내용은 없고, 필기 각 줄과
@@ -97,10 +167,10 @@
 
       <!-- 상시 노출되는 직접 질문 입력창 -- 필기 흐름과 무관하게 아무때나
            바로 물어볼 수 있음. 스크롤돼도 항상 바닥에 고정. -->
-      <div style="flex-shrink: 0; padding: 12px 22px; border-top: 1px solid #E6E9EF;">
-        <div id="ask-answer" style="display: none; background: #FFF4E5; border: 1px solid #FFE0B3; border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; font-size: 13px; line-height: 1.5; color: #6B4A1F;"></div>
-        <div style="display: flex; align-items: center; gap: 8px; background: #FFFFFF; border: 1px solid #D3D3D3; border-radius: 999px; padding: 8px 14px;">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#808495" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <div style="flex-shrink: 0; padding: 12px 22px; border-top: 1px solid var(--color-border);">
+        <div id="ask-answer" style="display: none; background: var(--color-hint-bg); border: 1px solid var(--color-hint-border); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; font-size: 13px; line-height: 1.5; color: var(--color-hint-text);"></div>
+        <div style="display: flex; align-items: center; gap: 8px; background: var(--color-surface); border: 1px solid var(--color-border-input); border-radius: 999px; padding: 8px 14px;">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-muted)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           <input id="ask-input" type="text" placeholder="지금 바로 물어보기..." style="flex-grow: 1; border: none; outline: none; font-size: 13.5px; font-family: inherit; background: none;">
         </div>
       </div>
@@ -112,12 +182,14 @@
   <!-- 필기단 마커를 클릭했을 때, 그 줄과 같은 높이에 뜨는 코멘트 팝오버.
        에이전트 패널 리스트에 영구히 쌓이지 않고, 한 번에 하나만 -- 명시적으로
        선택했을 때만 보여준다는 원칙(사용자 지적 반영). -->
-  <div id="hint-popover" style="display: none; position: fixed; width: 300px; background: #FFF4E5; border: 1px solid #FFE0B3; border-radius: 10px; padding: 12px 14px; font-size: 13px; line-height: 1.5; color: #6B4A1F; box-shadow: 0 4px 16px rgba(0,0,0,0.12); z-index: 50;">
-    <button onclick="closeHintPopover()" id="hint-popover-close" style="position: absolute; top: 8px; right: 10px; background: none; border: none; cursor: pointer; color: #B75C00; font-size: 14px; line-height: 1; padding: 2px;">×</button>
+  <div id="hint-popover" style="display: none; position: fixed; width: 300px; background: var(--color-hint-bg); border: 1px solid var(--color-hint-border); border-radius: 10px; padding: 12px 14px; font-size: 13px; line-height: 1.5; color: var(--color-hint-text); box-shadow: var(--shadow-popover); z-index: 50;">
+    <button onclick="closeHintPopover()" id="hint-popover-close" style="position: absolute; top: 8px; right: 10px; background: none; border: none; cursor: pointer; color: var(--color-badge-text); font-size: 14px; line-height: 1; padding: 2px;">×</button>
     <div style="display: flex; gap: 8px; align-items: flex-start; padding-right: 14px;">
       <span id="hint-popover-icon" style="margin-top: 2px; flex-shrink: 0;"></span>
       <div id="hint-popover-text"></div>
     </div>
+    <!-- 피드백 버튼: 에이전트단 메시지를 클릭해서 펼쳤을 때만 보인다(호버 미리보기에는 없음). 라우팅에는 연결하지 않고 기록만 한다. -->
+    <div id="hint-feedback" style="display: none; gap: 6px; margin-top: 10px; justify-content: flex-end;"></div>
   </div>
 
   <!-- "지난 시간 복습" 전용 팝오버 -- hint-popover와 별개 요소로 둔다.
@@ -126,59 +198,59 @@
        에이전트단에 표시하면 안 됨), 위치도 에이전트 패널이 아니라 필기창
        기준으로 뜨고, 색도 에이전트 힌트(주황)/바로 물어보기(파랑)와 다르게
        중립적인 스타일을 쓴다. -->
-  <div id="summary-popover" style="display: none; position: fixed; width: 340px; background: #FFFFFF; border: 1px solid #D9DCE3; border-radius: 10px; padding: 12px 14px; font-size: 13px; line-height: 1.6; color: #31333F; box-shadow: 0 4px 16px rgba(0,0,0,0.14); z-index: 50;">
-    <button onclick="closeSummaryPopover()" id="summary-popover-close" style="position: absolute; top: 8px; right: 10px; background: none; border: none; cursor: pointer; color: #808495; font-size: 14px; line-height: 1; padding: 2px;">×</button>
-    <div style="font-weight: 600; margin-bottom: 6px; color: #595F6E;">📋 지난 시간 복습</div>
+  <div id="summary-popover" style="display: none; position: fixed; width: 340px; background: var(--color-surface); border: 1px solid var(--color-neutral-300); border-radius: 10px; padding: 12px 14px; font-size: 13px; line-height: 1.6; color: var(--color-ink); box-shadow: var(--shadow-popover-strong); z-index: 50;">
+    <button onclick="closeSummaryPopover()" id="summary-popover-close" style="position: absolute; top: 8px; right: 10px; background: none; border: none; cursor: pointer; color: var(--color-text-muted); font-size: 14px; line-height: 1; padding: 2px;">×</button>
+    <div style="font-weight: 600; margin-bottom: 6px; color: var(--color-text-secondary);">📋 지난 시간 복습</div>
     <div id="summary-popover-text"></div>
   </div>
 
   <!-- ===== Bottom bar: 상태표시 + 애드온 토글 (좌/우 컬럼과 정렬, 각 영역에 관련된 것만 배치) ===== -->
-  <div style="flex-shrink: 0; display: flex; border-top: 1px solid #E6E9EF; background: #FAFAFC;">
+  <div style="flex-shrink: 0; display: flex; border-top: 1px solid var(--color-border); background: var(--color-surface-bottom);">
 
     <!-- 왼쪽: 필기 관련 상태/애드온 (노트패드 컬럼과 폭 정렬) -->
     <div style="flex-grow: 1; min-width: 0; display: flex; align-items: center; gap: 18px; padding: 9px 64px;">
-      <span id="note-status-text" style="font-size: 12px; color: #808495; flex-shrink: 0;">오늘 0개 필기</span>
-      <div style="width: 1px; height: 16px; background: #E6E9EF; flex-shrink: 0;"></div>
+      <span id="note-status-text" style="font-size: 12px; color: var(--color-text-muted); flex-shrink: 0;">오늘 0개 필기</span>
+      <div style="width: 1px; height: 16px; background: var(--color-border); flex-shrink: 0;"></div>
       <!-- 테스트 전용 버튼 -- DB는 전혀 건드리지 않고 필기창(+동기화된 에이전트
            마커)만 비운다. 필기단 소속 기능이라 위치도 필기단 상태줄로 옮김
            (2026-10-02, "상단바에 있으면 에이전트 기능처럼 보여 혼란스럽다"는
            지적 반영). 사용성 테스트 끝나면 이 <button> 블록만 지우면 됨. -->
-      <button id="clear-screen-btn" title="테스트용 -- DB는 그대로 두고 필기창만 비움" style="display: flex; align-items: center; gap: 6px; background: #FFFFFF; border: 1px dashed #C7CBD4; border-radius: 8px; padding: 5px 11px; font-size: 12px; color: #808495; cursor: pointer; flex-shrink: 0;">
+      <button id="clear-screen-btn" title="테스트용 -- DB는 그대로 두고 필기창만 비움" style="display: flex; align-items: center; gap: 6px; background: var(--color-surface); border: 1px dashed var(--color-border-dashed); border-radius: 8px; padding: 5px 11px; font-size: 12px; color: var(--color-text-muted); cursor: pointer; flex-shrink: 0;">
         🧪 화면 지우기
       </button>
-      <div style="width: 1px; height: 16px; background: #E6E9EF; flex-shrink: 0;"></div>
+      <div style="width: 1px; height: 16px; background: var(--color-border); flex-shrink: 0;"></div>
       <label style="display: flex; align-items: center; gap: 7px; cursor: pointer;">
-        <span style="width: 30px; height: 18px; border-radius: 999px; background: #D9DCE3; position: relative; flex-shrink: 0;">
-          <span style="position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #FFFFFF;"></span>
+        <span style="width: 30px; height: 18px; border-radius: 999px; background: var(--color-neutral-300); position: relative; flex-shrink: 0;">
+          <span style="position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--color-surface);"></span>
         </span>
-        <span style="font-size: 12.5px; color: #595F6E;">음성 녹음 연동 (STT)</span>
+        <span style="font-size: 12.5px; color: var(--color-text-secondary);">음성 녹음 연동 (STT)</span>
       </label>
     </div>
 
     <!-- 구분선: 위쪽 패널 경계와 같은 위치 -->
-    <div style="width: 1px; flex-shrink: 0; background: #E6E9EF;"></div>
+    <div style="width: 1px; flex-shrink: 0; background: var(--color-border);"></div>
 
     <!-- 오른쪽: 에이전트 관련 상태/애드온 (에이전트 패널과 폭 정렬) -->
     <div style="width: 408px; flex-shrink: 0; display: flex; flex-direction: column; justify-content: center; gap: 7px; padding: 9px 22px;">
-      <span style="font-size: 12px; color: #808495;">오늘 힌트 2개 준비됨</span>
+      <span style="font-size: 12px; color: var(--color-text-muted);">오늘 힌트 2개 준비됨</span>
       <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
         <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-          <span style="width: 28px; height: 17px; border-radius: 999px; background: #D9DCE3; position: relative; flex-shrink: 0;">
-            <span style="position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: #FFFFFF;"></span>
+          <span style="width: 28px; height: 17px; border-radius: 999px; background: var(--color-neutral-300); position: relative; flex-shrink: 0;">
+            <span style="position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: var(--color-surface);"></span>
           </span>
-          <span style="font-size: 12px; color: #595F6E;">퀴즈 생성</span>
+          <span style="font-size: 12px; color: var(--color-text-secondary);">퀴즈 생성</span>
         </label>
         <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-          <span style="width: 28px; height: 17px; border-radius: 999px; background: #D9DCE3; position: relative; flex-shrink: 0;">
-            <span style="position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: #FFFFFF;"></span>
+          <span style="width: 28px; height: 17px; border-radius: 999px; background: var(--color-neutral-300); position: relative; flex-shrink: 0;">
+            <span style="position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: var(--color-surface);"></span>
           </span>
-          <span style="font-size: 12px; color: #595F6E;">자료 추천</span>
+          <span style="font-size: 12px; color: var(--color-text-secondary);">자료 추천</span>
         </label>
         <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-          <span style="width: 28px; height: 17px; border-radius: 999px; background: #D9DCE3; position: relative; flex-shrink: 0;">
-            <span style="position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: #FFFFFF;"></span>
+          <span style="width: 28px; height: 17px; border-radius: 999px; background: var(--color-neutral-300); position: relative; flex-shrink: 0;">
+            <span style="position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: var(--color-surface);"></span>
           </span>
-          <span style="font-size: 12px; color: #595F6E;">개념 그래프</span>
+          <span style="font-size: 12px; color: var(--color-text-secondary);">개념 그래프</span>
         </label>
       </div>
     </div>
@@ -187,7 +259,110 @@
 </div>
 
 <script>
-  const COURSE_ID = 'sesac_bootcamp';
+  // 과목 목록은 이 브라우저(localStorage)에만 저장한다 -- 시연/프로토타입용. 서버 저장은 아직 아님.
+  const COURSE_LIST_KEY = 'notemate.courses';
+  const COURSE_CURRENT_KEY = 'notemate.currentCourse';
+  const DEFAULT_COURSES = [{ id: 'sesac_bootcamp', name: 'SeSac 3기 과정' }];
+  function loadCourses() {
+    try {
+      const v = JSON.parse(localStorage.getItem(COURSE_LIST_KEY));
+      if (Array.isArray(v) && v.length) return v;
+    } catch (e) {}
+    return DEFAULT_COURSES.slice();
+  }
+  const courses = loadCourses();
+  let COURSE_ID = courses[0].id;
+  try {
+    const saved = localStorage.getItem(COURSE_CURRENT_KEY);
+    if (saved && courses.some((c) => c.id === saved)) COURSE_ID = saved;
+  } catch (e) {}
+
+  // 과목 드롭다운: 목록 보기, 과목 고르기(페이지를 새로 불러와 그 과목의 필기를 연다), 새 과목 추가
+  const courseBtn = document.getElementById('course-btn');
+  const courseMenu = document.getElementById('course-menu');
+  const courseListEl = document.getElementById('course-list');
+  const courseBtnText = document.getElementById('course-btn-text');
+  const courseNewName = document.getElementById('course-new-name');
+  const courseAddBtn = document.getElementById('course-add-btn');
+  // UI 선택 상태만 다룬다(필기 내용은 바꾸지 않음). 실제 과목별 필기 전환은 나중 단계.
+  let uiSelectedId = COURSE_ID;
+  function currentCourseName() {
+    const c = courses.find((x) => x.id === uiSelectedId);
+    return c ? c.name : courses[0].name;
+  }
+  function saveCourseList() {
+    try { localStorage.setItem(COURSE_LIST_KEY, JSON.stringify(courses)); } catch (e) {}
+  }
+  function renderCourseList() {
+    courseBtnText.textContent = currentCourseName();
+    courseListEl.innerHTML = '';
+    courses.forEach((c) => {
+      const isCurrent = c.id === uiSelectedId;
+      const row = document.createElement('div');
+      row.setAttribute('role', 'option');
+      row.setAttribute('aria-selected', String(isCurrent));
+      row.style.cssText = 'display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 6px; cursor: pointer; font-size: 13.5px; color: var(--color-ink);' + (isCurrent ? ' background: var(--color-surface-muted); font-weight: 600;' : '');
+      row.onmouseenter = () => { if (!isCurrent) row.style.background = 'var(--color-surface-subtle)'; };
+      row.onmouseleave = () => { if (!isCurrent) row.style.background = ''; };
+      const mark = document.createElement('span');
+      mark.textContent = isCurrent ? '✓' : '';
+      mark.style.cssText = 'width: 12px; color: var(--color-success);';
+      const label = document.createElement('span');
+      label.textContent = c.name;
+      label.style.flex = '1';
+      row.append(mark, label);
+      row.onclick = (ev) => { ev.stopPropagation(); selectCourse(c.id); };
+      // 삭제 버튼: 과목이 하나만 남으면 막는다
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.textContent = '×';
+      del.title = '과목 삭제';
+      del.setAttribute('aria-label', `${c.name} 삭제`);
+      del.style.cssText = 'border: none; background: none; color: var(--color-text-muted); font-size: 16px; line-height: 1; cursor: pointer; padding: 0 2px;';
+      del.onclick = (ev) => { ev.stopPropagation(); deleteCourse(c.id); };
+      row.appendChild(del);
+      courseListEl.appendChild(row);
+    });
+  }
+  function openCourseMenu(open) {
+    courseMenu.style.display = open ? 'block' : 'none';
+    courseBtn.setAttribute('aria-expanded', String(open));
+    if (open) courseNewName.focus();
+  }
+  function selectCourse(id) {
+    uiSelectedId = id;
+    renderCourseList();
+    openCourseMenu(false);
+  }
+  function addCourse() {
+    const name = courseNewName.value.trim();
+    if (!name) { courseNewName.focus(); return; }
+    const id = 'course_' + Date.now().toString(36);
+    courses.push({ id, name });
+    saveCourseList();
+    courseNewName.value = '';
+    uiSelectedId = id;
+    renderCourseList();
+    openCourseMenu(true);
+  }
+  function deleteCourse(id) {
+    if (courses.length <= 1) return; // 마지막 과목은 남긴다
+    courses.splice(courses.findIndex((c) => c.id === id), 1);
+    saveCourseList();
+    if (uiSelectedId === id) uiSelectedId = courses[0].id;
+    renderCourseList();
+  }
+  courseBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openCourseMenu(courseMenu.style.display === 'none'); });
+  courseBtn.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); courseBtn.click(); } });
+  courseMenu.addEventListener('click', (ev) => ev.stopPropagation());
+  courseAddBtn.addEventListener('click', (ev) => { ev.stopPropagation(); addCourse(); });
+  courseNewName.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); addCourse(); }
+    if (ev.key === 'Escape') openCourseMenu(false);
+  });
+  document.addEventListener('click', () => openCourseMenu(false));
+  document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') openCourseMenu(false); });
+  renderCourseList();
   const SESSION_ID = crypto.randomUUID();
 
   const noteScroll = document.getElementById('note-scroll');
@@ -238,7 +413,7 @@
 
   document.execCommand('defaultParagraphSeparator', false, 'p');
 
-  const lightbulbSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FF8700" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2Z"/></svg>';
+  const lightbulbSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--color-hint-icon)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2Z"/></svg>';
 
   let openMarker = null; // 지금 팝오버를 띄운 마커 -- 같은 걸 다시 누르면 닫기
   const markerPairs = []; // {noteMarker, agentMarker} -- 필기 삭제 시 짝을 같이 정리하기 위한 추적
@@ -371,17 +546,18 @@
     if (!notice && !preview) markPairRead(markerEl);
 
     hintPopoverText.textContent = text;
+    renderHintFeedback(markerEl, text, variant, preview);
     hintPopoverIcon.innerHTML = variant === 'ask' ? askSvg : lightbulbSvg;
     if (variant === 'ask') {
-      hintPopover.style.background = '#EFF6FF';
-      hintPopover.style.borderColor = '#BFDBFE';
-      hintPopover.style.color = '#1E3A8A';
-      hintPopoverClose.style.color = '#2563EB';
+      hintPopover.style.background = 'var(--color-ask-bg)';
+      hintPopover.style.borderColor = 'var(--color-ask-border)';
+      hintPopover.style.color = 'var(--color-ask-text)';
+      hintPopoverClose.style.color = 'var(--color-ask-accent)';
     } else {
-      hintPopover.style.background = '#FFF4E5';
-      hintPopover.style.borderColor = '#FFE0B3';
-      hintPopover.style.color = '#6B4A1F';
-      hintPopoverClose.style.color = '#B75C00';
+      hintPopover.style.background = 'var(--color-hint-bg)';
+      hintPopover.style.borderColor = 'var(--color-hint-border)';
+      hintPopover.style.color = 'var(--color-hint-text)';
+      hintPopoverClose.style.color = 'var(--color-badge-text)';
     }
 
     const markerRect = markerEl.getBoundingClientRect();
@@ -414,6 +590,54 @@
   function closeHintPopover() {
     hintPopover.style.display = 'none';
     openMarker = null;
+  }
+
+  // 힌트 피드백 버튼 (2026-10-07 결정). 에이전트단 메시지를 클릭해서 펼친 경우에만 보이고,
+  // 호버 미리보기나 필기단 아이콘에서 연 경우에는 숨긴다. 버튼을 눌러도 팝오버는 닫지 않는다.
+  // 서비스 화면이 평평한 스타일이라 버튼도 단색으로 맞춘다. 옅은 파스텔 배경에 기호는 진한 색으로 올려서 잘 보이게 한다.
+  const HINT_FEEDBACK_BUTTONS = [
+    { value: '+', label: '도움 됨', base: 'var(--color-feedback-plus-bg)', ink: 'var(--color-feedback-plus-ink)' },
+    { value: '−', label: '도움 안 됨', base: 'var(--color-feedback-minus-bg)', ink: 'var(--color-feedback-minus-ink)' },
+    { value: '✓', label: '이해완료 / 이미 알고 있음', base: 'var(--color-feedback-check-bg)', ink: 'var(--color-feedback-check-ink)' },
+  ];
+
+  function renderHintFeedback(markerEl, text, variant, preview) {
+    const row = document.getElementById('hint-feedback');
+    row.innerHTML = '';
+    // 클릭으로 펼친 경우에만 보인다(힌트든 바로 물어보기 답변이든, 필기단/에이전트단 아이콘 어느 쪽이든 동일). 호버 미리보기에서는 숨긴다.
+    const show = !preview;
+    row.style.display = show ? 'flex' : 'none';
+    if (!show) return;
+    HINT_FEEDBACK_BUTTONS.forEach((b) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = b.value;
+      btn.title = b.label;
+      btn.setAttribute('aria-label', b.label);
+      btn.style.cssText = [
+        'width:26px', 'height:26px', 'border-radius:50%', 'border:none', 'cursor:pointer',
+        `color:${b.ink}`, 'font-size:16px', 'font-weight:700', 'line-height:1', 'padding:0',
+        `background:${b.base}`,
+        'transition:opacity 0.15s ease',
+      ].join('; ');
+      btn.onmouseenter = () => { btn.style.opacity = '0.85'; };
+      btn.onmouseleave = () => { btn.style.opacity = '1'; };
+      btn.onclick = (ev) => {
+        ev.stopPropagation();
+        sendHintFeedback(text, b.value, btn, variant);
+      };
+      row.appendChild(btn);
+    });
+  }
+
+  function sendHintFeedback(text, value, btn, variant) {
+    // 선택 표시만 남기고, 팝오버는 그대로 둔다. 기록 실패는 화면 흐름을 막지 않는다.
+    // 선택 표시: 평평한 스타일에 맞춰 테두리 선으로만 구분한다.
+    btn.style.outline = 'var(--outline-selected)';
+    btn.style.outlineOffset = '1px';
+    const kind = variant === 'ask' ? 'ask' : 'hint';
+    const body = new URLSearchParams({ course_id: COURSE_ID, session_id: SESSION_ID, hint_text: text, value, kind });
+    fetch('/api/hint_feedback', { method: 'POST', body }).catch(() => {});
   }
 
   // "지난 시간 복습"은 에이전트 힌트/바로 물어보기와 별개 시스템이라
@@ -659,7 +883,7 @@
     hintTrack.style.height = noteBody.scrollHeight + 'px';
   }
 
-  const askSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1 .8-1 1.7"/><circle cx="12" cy="16.5" r=".3" fill="#2563EB"/></svg>';
+  const askSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--color-ask-accent)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1 .8-1 1.7"/><circle cx="12" cy="16.5" r=".3" fill="var(--color-ask-accent)"/></svg>';
 
   // "바로 물어보기"도 결국 에이전트 타임라인 흐름에 통합되는 거라, 억지로
   // 맨 아래에 고정하고 강제 스크롤하는 대신 -- 필기단에 실제 자리(작은
@@ -671,7 +895,7 @@
   function addAskLine(answerText) {
     const line = document.createElement('p');
     line.contentEditable = 'false';
-    line.style.cssText = 'margin: 0 0 1.4em; display: flex; align-items: center; gap: 6px; color: #2563EB; font-size: 13px;';
+    line.style.cssText = 'margin: 0 0 1.4em; display: flex; align-items: center; gap: 6px; color: var(--color-ask-accent); font-size: 13px;';
     // 아이콘은 addMarkerPair()가 마커 버튼으로 붙여주니 여기서 또 넣지 않음
     // (전엔 둘 다 넣어서 아이콘이 2개 보였음, 2026-10-02 실측).
     line.innerHTML = `<span>바로 물어보기 — 답변 준비됨</span>`;
@@ -728,7 +952,7 @@
     const file = fileInput.files[0];
     if (!file) return;
     fileStatusText.textContent = `${file.name} (처리 중...)`;
-    fileStatusText.style.color = '#31333F';
+    fileStatusText.style.color = 'var(--color-ink)';
     const formData = new FormData();
     formData.append('file', file);
     formData.append('source', 'base');
@@ -740,7 +964,7 @@
       fileStatusText.textContent = `${result.filename} (${result.chunks_saved}개 청크)`;
     } catch (e) {
       fileStatusText.textContent = '업로드 실패: ' + e;
-      fileStatusText.style.color = '#C0392B';
+      fileStatusText.style.color = 'var(--color-danger)';
     } finally {
       uploadBtn.disabled = false;
       fileInput.value = '';
@@ -778,13 +1002,13 @@
   // 자체를 안 보여줌.
   function insertUnitDivider(dateKey, previousKey) {
     const divider = document.createElement('div');
-    divider.style.cssText = 'display:flex; align-items:center; gap:10px; margin:30px 0 22px; color:#808495; font-size:12.5px;';
-    divider.innerHTML = `<span style="flex-shrink:0; font-weight:600;">${formatUnitLabel(dateKey)}</span><span style="flex-grow:1; height:1px; background:#E6E9EF;"></span>`;
+    divider.style.cssText = 'display:flex; align-items:center; gap:10px; margin:30px 0 22px; color:var(--color-text-muted); font-size:12.5px;';
+    divider.innerHTML = `<span style="flex-shrink:0; font-weight:600;">${formatUnitLabel(dateKey)}</span><span style="flex-grow:1; height:1px; background:var(--color-border);"></span>`;
 
     if (previousKey) {
       const reviewBtn = document.createElement('button');
       reviewBtn.textContent = '📋 지난 시간 복습';
-      reviewBtn.style.cssText = 'flex-shrink:0; background:#ECFDF5; border:1px solid #A7F3D0; color:#065F46; border-radius:999px; padding:4px 11px; font-size:11.5px; cursor:pointer;';
+      reviewBtn.style.cssText = 'flex-shrink:0; background:var(--color-review-bg); border:1px solid var(--color-review-border); color:var(--color-review-text); border-radius:999px; padding:4px 11px; font-size:11.5px; cursor:pointer;';
       reviewBtn.onclick = async (ev) => {
         ev.stopPropagation();
         if (openSummaryMarker === reviewBtn) { closeSummaryPopover(); return; }
