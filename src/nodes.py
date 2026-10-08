@@ -4,6 +4,8 @@ assess_note는 실제 로직(임베딩 + 벡터 검색 + LLM 구조화 출력)�
 tier2_deep_agent, store_only는 아직 스텁 -- 각 함수의 TODO 참고.
 """
 
+from datetime import datetime, timezone
+
 from pydantic import BaseModel, Field
 
 from src.db import insert_note_chunk, search_top_similarity
@@ -67,8 +69,19 @@ def assess_note(state: NoteMateState) -> dict:
 
     embedding = embed_text(content, purpose="assess_note_embedding")
 
-    raw_top_score = search_top_similarity(embedding, course_id=state.get("course_id"))
-    top_score = raw_top_score if raw_top_score is not None else 0.0
+    top_match = search_top_similarity(embedding, course_id=state.get("course_id"))
+    top_score = top_match["similarity"] if top_match else 0.0
+    # 힌트 피드백 반영 Phase 2(✓ 억제, 2026-10-08): 가장 비슷한 과거 필기가
+    # "이미 알고 있음(✓)" 피드백을 받은 적 있으면 그 정보를 같이 들고 간다 --
+    # 실제 억제 여부 판단은 routers.compute_routing_decision이 함(세션중복
+    # 억제와 같은 자리/패턴).
+    top_match_feedback_value = None
+    top_match_feedback_days_ago = None
+    if top_match and top_match["feedback_value"] and top_match["feedback_at"]:
+        top_match_feedback_value = top_match["feedback_value"]
+        top_match_feedback_days_ago = (
+            datetime.now(timezone.utc) - top_match["feedback_at"]
+        ).total_seconds() / 86400
 
     session_id = state.get("session_id")
     session_duplicate_score, session_duplicate_elapsed_seconds = (
@@ -102,6 +115,8 @@ def assess_note(state: NoteMateState) -> dict:
         "assessment": assessment,
         "session_duplicate_score": session_duplicate_score,
         "session_duplicate_elapsed_seconds": session_duplicate_elapsed_seconds,
+        "top_match_feedback_value": top_match_feedback_value,
+        "top_match_feedback_days_ago": top_match_feedback_days_ago,
     }
 
 
@@ -188,6 +203,24 @@ def store_only(state: NoteMateState) -> dict:
     return {}
 
 
+def _classify_hint_category(assessment: dict, has_hint: bool) -> str | None:
+    """힌트 유형을 추가 LLM 호출 없이, 이미 계산된 assessment 신호로 결정론적으로
+    분류한다(2026-10-08, 힌트 피드백 Phase 4 선행 작업 -- "유사 유형/주제/형식별
+    피드백 합계"를 나중에 묶을 축). 힌트가 없는 줄(store_only)은 분류 의미가
+    없어 None. 우선순위는 compute_routing_decision의 분기 순서와 동일하게 맞춤
+    (is_question > is_new_concept > is_abbreviated > 그 외).
+    """
+    if not has_hint:
+        return None
+    if assessment.get("is_question"):
+        return "question_answer"
+    if assessment.get("is_new_concept"):
+        return "new_concept"
+    if assessment.get("is_abbreviated"):
+        return "abbreviated_reminder"
+    return "general_nudge"
+
+
 def persist_note(state: NoteMateState) -> dict:
     """Tier1/2 경로 상관없이 공통으로 실행 -- 판단 결과를 note_chunks에 저장.
 
@@ -212,6 +245,15 @@ def persist_note(state: NoteMateState) -> dict:
         "tier2_result": state.get("tier2_result"),
         "embedding": state.get("embedding"),
         "client_line_id": state.get("client_line_id"),
+        "hint_category": _classify_hint_category(assessment, bool(state.get("tier2_result"))),
+        "top_match_feedback_value": state.get("top_match_feedback_value"),
+        "top_match_feedback_days_ago": state.get("top_match_feedback_days_ago"),
+        # 2026-10-08: session_id는 지금까지 세션 작업기억(중복 힌트 방지용,
+        # 인메모리)에만 쓰이고 note_chunks엔 저장 안 됐음 -- 그래서
+        # 새로고침하면 같은 날 여러 세션 경계가 화면에서 다시 사라지는
+        # 문제가 있었음(사용자 지적). 프론트엔드가 세션 구분선을
+        # 재구성하는 데 쓸 수 있게 같이 저장한다.
+        "session_id": state.get("session_id"),
     }
     insert_note_chunk(row)
 

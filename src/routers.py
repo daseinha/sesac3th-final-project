@@ -22,6 +22,11 @@ SESSION_DUPLICATE_THRESHOLD = 0.85  # [잠정] 세션 내 중복 판정 기준 -
 # 피드백 "같은 질문을 한참 뒤 다시 적었으면 중복이 아니라 재질문일 수 있다"
 # 반영). .env로 덮어쓸 수 있게 해서 발표 시연 때는 짧게 줄일 수 있음.
 SESSION_DUP_REALLOW_SECONDS = int(os.environ.get("SESSION_DUP_REALLOW_SECONDS", str(15 * 60)))
+# 힌트 피드백 반영 Phase 2(✓ 억제, 2026-10-08, HINT_FEEDBACK_SPEC.md 열린 질문 2번
+# "✓ 억제 기간을 몇 일로 시작할지"). 근거 데이터가 거의 없어 임의의 초기값으로
+# 시작 -- 실사용 데이터가 쌓이면 재검토 필요. .env로 덮어쓸 수 있게 해서 발표
+# 시연 때는 짧게 줄일 수 있음(다른 임계값들과 같은 패턴).
+FEEDBACK_SUPPRESS_DAYS = float(os.environ.get("FEEDBACK_SUPPRESS_DAYS", "7"))
 
 
 def compute_routing_decision(state: NoteMateState) -> Literal["tier2", "store_only"]:
@@ -44,6 +49,22 @@ def compute_routing_decision(state: NoteMateState) -> Literal["tier2", "store_on
 
     if assessment and assessment["is_question"]:
         return "tier2"
+
+    # 힌트 피드백 반영 Phase 2(✓ 억제, 2026-10-08): 가장 비슷한 과거 필기가
+    # "이미 알고 있음(✓)" 피드백을 받은 적 있고 그게 FEEDBACK_SUPPRESS_DAYS
+    # 이내면, is_new_concept/top_score 같은 나머지 신호와 무관하게 조용히
+    # 넘어간다. is_question 체크보다 뒤에 둔 이유: 세션중복과 달리 "며칠 전에
+    # 이해했었다"는 사실이 "지금 명시적으로 물어본 것"보다 우선할 이유는
+    # 없음 -- 지금 질문했다면 그 질문에는 답해야 함.
+    feedback_value = state.get("top_match_feedback_value")
+    feedback_days_ago = state.get("top_match_feedback_days_ago")
+    if (
+        feedback_value == "✓"
+        and feedback_days_ago is not None
+        and feedback_days_ago <= FEEDBACK_SUPPRESS_DAYS
+    ):
+        return "store_only"
+
     # is_new_concept은 계산만 되고 라우팅엔 한 번도 안 쓰이고 있었음(2026-10-02,
     # 6/8일차 리뷰 중 발견 -- CLAUDE.md "라우팅 기준 보강" 변경 이력 참고).
     # LLM이 명시적으로 "새 개념"이라고 판단했다면 top_score/is_abbreviated와

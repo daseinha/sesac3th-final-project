@@ -27,7 +27,7 @@ class NoteMateState(TypedDict):
     session_id: str | None  # 호출하는 쪽이 지정. 세션 경계 판단은 백엔드가 안 함
     client_line_id: str | None  # 프론트엔드의 필기 "줄" 식별자 -- 같은 줄을 수정해 재제출해도
     # 같은 값이 유지됨. 파이프라인 판단에는 전혀 안 쓰이고 persist_note가 그대로 저장만 함 --
-    # get_today_notes()가 "오늘 복원 화면"에서 한 줄의 여러 수정본을 중복 표시하지 않고
+    # get_all_notes()가 "전체 복원 화면"에서 한 줄의 여러 수정본을 중복 표시하지 않고
     # 최신 것만 고르게 해주는 키(2026-10-02, 새로고침 시 수정 내역이 전부 중복으로
     # 쌓여 보이던 버그 수정).
 
@@ -39,7 +39,17 @@ class NoteMateState(TypedDict):
     session_duplicate_elapsed_seconds: float | None  # 그 중복과의 경과 시간(초) --
     # 라우팅 판단(15분 예외)에만 쓰는 임시 필드. DB 컬럼 없음 -- persist_note가
     # 저장하지 않음(2026-10-05, session_duplicate_score만 판단 로그로 남기기로 함).
+    top_match_feedback_value: str | None  # 가장 비슷한 과거 필기의 피드백(+/-/✓) --
+    top_match_feedback_days_ago: float | None  # 그 피드백이 며칠 전인지(2026-10-08,
+    # 힌트 피드백 반영 Phase 2: ✓ 억제). session_duplicate_score와 같은 패턴으로
+    # DB 컬럼에도 남긴다(persist_note) -- "억제가 실제로 몇 번 발동했는지"를
+    # 나중에 쿼리로 뽑을 수 있게(`routing_decision='store_only' AND
+    # top_match_feedback_value='✓'`이면 그때 발동한 것).
 
     # --- 라우팅 결과 ---
     routing_decision: Literal["tier2", "store_only"] | None
     tier2_result: str | None  # Tier2 딥 에이전트가 보강한 카드 내용
+    hint_category: str | None  # 힌트 유형(2026-10-08) -- question_answer/new_concept/
+    # abbreviated_reminder/general_nudge 중 하나, tier2_result가 있을 때만 의미 있음.
+    # 추가 LLM 호출 없이 이미 계산된 assessment 신호 조합으로 결정론적으로 매김.
+    # 나중에(Phase 4) "이 유형의 피드백 합계가 좋으면 더 자주" 반영할 때 묶는 축.

@@ -25,11 +25,16 @@ def get_pool() -> ConnectionPool:
     return _pool
 
 
-def search_top_similarity(embedding: list[float], course_id: str | None) -> float | None:
-    """note_chunks에서 embedding과 가장 유사한 기존 행의 코사인 유사도(0~1에 가까움)를 반환.
+def search_top_similarity(embedding: list[float], course_id: str | None) -> dict | None:
+    """note_chunks에서 embedding과 가장 유사한 기존 행의 코사인 유사도(0~1에 가까움)와
+    그 행의 피드백 상태(feedback_value/feedback_at)를 함께 반환.
 
     비교할 기존 행이 하나도 없으면(테이블이 비어있는 등) None을 반환한다 --
     "지원 자료가 없다"는 의미이므로 호출부(assess_note)에서 확신도 낮음으로 처리한다.
+
+    2026-10-08: 피드백 반영 구조(✓ 억제) 추가 -- 가장 비슷한 과거 필기가 "이미
+    알고 있음(✓)" 피드백을 받았었는지를 assess_note가 같이 알아야 해서, 이
+    top-1 조회에 얹어서 같이 가져온다(쿼리 한 번 더 안 날리려고).
 
     파이썬 list를 psycopg에 그냥 넘기면 double precision[]로 직렬화돼서
     pgvector의 <=> 연산자가 못 알아본다 -- 그래서 %s::vector로 명시적으로
@@ -38,7 +43,8 @@ def search_top_similarity(embedding: list[float], course_id: str | None) -> floa
     pool = get_pool()
     course_filter = "AND course_id = %(course_id)s" if course_id else ""
     query = f"""
-        SELECT 1 - (embedding <=> %(embedding)s::vector) AS similarity
+        SELECT 1 - (embedding <=> %(embedding)s::vector) AS similarity,
+               feedback_value, feedback_at
         FROM note_chunks
         WHERE embedding IS NOT NULL
         {course_filter}
@@ -49,7 +55,28 @@ def search_top_similarity(embedding: list[float], course_id: str | None) -> floa
         with conn.cursor() as cur:
             cur.execute(query, {"embedding": embedding, "course_id": course_id})
             row = cur.fetchone()
-            return row[0] if row else None
+            if not row:
+                return None
+            return {"similarity": row[0], "feedback_value": row[1], "feedback_at": row[2]}
+
+
+def record_hint_feedback(origin_ref: str, value: str) -> bool:
+    """이 힌트가 달린 원본 필기 행(note_chunks)에 피드백을 기록한다.
+
+    기존 feedback_value가 있어도 마지막 선택으로 덮어쓴다(HINT_FEEDBACK_SPEC.md
+    "같은 힌트에 여러 번 누르면 마지막 선택을 기준으로 한다" 원칙 그대로).
+    origin_ref가 UNIQUE라 최대 한 행만 바뀐다. 매칭되는 행이 없으면 False.
+    """
+    pool = get_pool()
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE note_chunks SET feedback_value = %(value)s, feedback_at = now() "
+                "WHERE origin_ref = %(origin_ref)s;",
+                {"value": value, "origin_ref": origin_ref},
+            )
+            conn.commit()
+            return cur.rowcount > 0
 
 
 def search_similar_chunks(
@@ -177,13 +204,17 @@ def get_today_hints(course_id: str | None) -> list[dict]:
             return [dict(zip(columns, row)) for row in cur.fetchall()]
 
 
-def get_today_notes(course_id: str | None) -> list[dict]:
-    """오늘(서버 기준 날짜) 실시간으로 입력된 필기 전체를 오래된순으로 반환.
+def get_all_notes(course_id: str | None) -> list[dict]:
+    """이 과목의 personal 필기 전체(날짜 제한 없이)를 오래된순으로 반환.
 
-    프론트엔드가 새로고침될 때 "빈 화면"이 아니라 실제로 오늘 쓴 내용을
-    그대로 복원하기 위한 용도 -- get_today_hints()와 달리 tier2로 간 것만
-    거르지 않고 personal 소스 전체를 가져온다(2026-10-02, 새로고침 시
-    가짜 데모 문단이 아니라 실제 필기가 보여야 한다는 지적 반영).
+    2026-10-08 전까지는 `created_at::date = CURRENT_DATE`로 "오늘"만 걸러서
+    새로고침 시 복원했음(구 이름 get_today_notes) -- 그런데 서비스를 껐다가
+    다음날 다시 켜면 화면이 다시 텅 비어서, "이어서 쓰는 필기장"이라는
+    서비스 취지와 맞지 않는다는 지적 반영(사용자: "종료하고 다시 서비스를
+    시작할 땐 기존 필기 기록들이 떠있는 상태여야 맞다"). 날짜 필터를 완전히
+    제거해서 과목의 전체 히스토리를 복원한다 -- get_today_hints()와 달리
+    tier2로 간 것만 거르지 않고 personal 소스 전체를 가져온다(2026-10-02,
+    새로고침 시 가짜 데모 문단이 아니라 실제 필기가 보여야 한다는 지적 반영).
 
     `origin_ref`가 `ask:`로 시작하는 것(필기창이 아니라 "지금 바로 물어보기"
     입력창에서 온 즉석 질문)은 제외한다 -- 안 그러면 새로고침할 때 질문이
@@ -200,27 +231,103 @@ def get_today_notes(course_id: str | None) -> list[dict]:
     `simulate_day.py`가 넣은 `sim:YYYYMMDD:...`의 날짜)를 뽑아내서 필기
     타임라인에 구분선을 그리는 데 쓴다(2026-10-02, "날짜/단원처럼 작성
     단위가 바뀌는 지점을 구분해달라"는 요청 반영). 실시간 입력(`live:...`)은
-    애초에 "오늘" 범위 밖으로 안 나가니 구분선이 필요 없고, 이 쿼리가
-    파싱 가능한 날짜가 없는 origin_ref는 프론트엔드가 그냥 구분선 없이 둔다.
+    이 쿼리가 파싱 가능한 날짜가 없는 origin_ref라 프론트엔드가 그냥 구분선
+    없이 둔다.
+
+    `session_id`도 반환한다(2026-10-08) -- 프론트엔드가 같은 날 안에서
+    "새 필기 시작"으로 나눈 세션 경계를 재구성해서, 새로고침해도 그 구분선이
+    사라지지 않고 "N번째 필기"로 다시 그려지도록 하는 데 쓴다. 이전엔
+    session_id가 DB에만 남고(중복 힌트 방지용) 화면 재구성에는 전혀
+    안 쓰여서, 새로고침하면 같은 날 여러 세션이 다시 하나로 뭉쳐 보이는
+    문제가 있었음.
     """
     pool = get_pool()
     course_filter = "AND course_id = %(course_id)s" if course_id else ""
     query = f"""
-        WITH todays AS (
-            SELECT content, tier2_result, created_at, client_line_id, origin_ref,
+        WITH all_notes AS (
+            SELECT content, tier2_result, created_at, client_line_id, origin_ref, session_id,
                    ROW_NUMBER() OVER (
                        PARTITION BY client_line_id ORDER BY created_at DESC
                    ) AS rn
             FROM note_chunks
             WHERE source = 'personal'
-              AND created_at::date = CURRENT_DATE
               AND origin_ref NOT LIKE 'ask:%%'
               {course_filter}
         )
-        SELECT content, tier2_result, created_at, client_line_id, origin_ref
-        FROM todays
+        SELECT content, tier2_result, created_at, client_line_id, origin_ref, session_id
+        FROM all_notes
         WHERE client_line_id IS NULL OR rn = 1
         ORDER BY created_at ASC;
+    """
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, {"course_id": course_id})
+            columns = [c.name for c in cur.description]
+            return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+
+def delete_session_notes(session_id: str) -> int:
+    """세션 구분선 옆 삭제 버튼용(2026-10-08) -- 이 session_id에 속한 personal
+    필기를 note_chunks에서 통째로 지운다. 삭제된 행 수를 반환.
+
+    "새 필기 시작"으로 세션을 수동으로 나눌 수 있게 된 만큼, 테스트/실수로
+    쌓인 세션 하나를 통째로 되돌릴 방법도 필요하다는 요청 반영. source을
+    'personal'로 한정하는 건 방어적 조치 -- session_id는 personal 필기에만
+    붙으므로 사실상 항상 참이지만, 혹시 모를 혼선을 막기 위해 명시.
+    """
+    pool = get_pool()
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM note_chunks WHERE session_id = %(session_id)s AND source = 'personal';",
+                {"session_id": session_id},
+            )
+            return cur.rowcount
+
+
+def insert_deleted_session(
+    session_id: str, course_id: str | None, day_key: str, ordinal: int, session_started_at: str
+) -> None:
+    """세션 삭제 "묘비"(tombstone) 기록(2026-10-08) -- `delete_session_notes()`로
+    실제 필기 행을 지운 직후 호출. 지워진 세션의 note_chunks 행 자체가
+    사라지므로, "그날 몇 번째 세션이 삭제됐는지"를 알 길이 없어지는 문제가
+    있었음(사용자 지적: "동일 날짜에 세션이 서너 번 생겼는데 중간 걸 지우면
+    번호가 꼬일 수 있다 -- 생성 시점 번호는 고정하고, 삭제된 건 '몇 번째가
+    삭제됨'이라고 타임라인에 남기면 재넘버링이 필요 없다"). `ordinal`은
+    생성 시점에 매겨진 번호를 그대로 받아서 저장(재계산 안 함),
+    `session_started_at`은 그 세션의 실제 첫 필기 시각(또는 생성 시각) --
+    나중에 재구성할 때 이 시각 기준으로 다른 필기들과 시간순으로 정확히
+    끼워 넣기 위함(삭제 시각이 아니라 원래 있던 자리에 묘비가 나와야 함).
+    """
+    pool = get_pool()
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO deleted_sessions "
+                "(session_id, course_id, day_key, ordinal, session_started_at) "
+                "VALUES (%(session_id)s, %(course_id)s, %(day_key)s, %(ordinal)s, %(session_started_at)s) "
+                "ON CONFLICT (session_id) DO NOTHING;",
+                {
+                    "session_id": session_id,
+                    "course_id": course_id,
+                    "day_key": day_key,
+                    "ordinal": ordinal,
+                    "session_started_at": session_started_at,
+                },
+            )
+
+
+def get_deleted_sessions(course_id: str | None) -> list[dict]:
+    """이 과목에서 삭제된 세션 묘비 전체를 반환 -- loadAllNotes()가 필기
+    타임라인에 "N번째 필기세션 삭제됨" 구분선을 끼워 넣는 데 쓴다.
+    """
+    pool = get_pool()
+    course_filter = "AND course_id = %(course_id)s" if course_id else ""
+    query = f"""
+        SELECT day_key, ordinal, session_started_at
+        FROM deleted_sessions
+        WHERE true {course_filter}
+        ORDER BY session_started_at ASC;
     """
     with pool.connection() as conn:
         with conn.cursor() as cur:
@@ -266,13 +373,15 @@ def insert_note_chunk(row: dict) -> None:
             content, source, medium, course_id, note_timestamp, origin_ref,
             top_score, is_question, is_abbreviated, is_new_concept,
             session_duplicate_score, routing_decision, tier2_result, embedding,
-            client_line_id
+            client_line_id, hint_category, top_match_feedback_value,
+            top_match_feedback_days_ago, session_id
         ) VALUES (
             %(content)s, %(source)s, %(medium)s, %(course_id)s,
             %(note_timestamp)s, %(origin_ref)s,
             %(top_score)s, %(is_question)s, %(is_abbreviated)s, %(is_new_concept)s,
             %(session_duplicate_score)s, %(routing_decision)s, %(tier2_result)s, %(embedding)s::vector,
-            %(client_line_id)s
+            %(client_line_id)s, %(hint_category)s, %(top_match_feedback_value)s,
+            %(top_match_feedback_days_ago)s, %(session_id)s
         )
         ON CONFLICT (origin_ref) DO NOTHING;
     """
