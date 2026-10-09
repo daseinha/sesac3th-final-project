@@ -49,6 +49,10 @@ class NoteMateState(TypedDict):
     # --- 라우팅 결과 ---
     routing_decision: Literal["tier2", "store_only"] | None
     tier2_result: str | None  # Tier2 딥 에이전트가 보강한 카드 내용
+    tier2_sources: str | None  # 그 힌트의 근거 요약(2026-10-09) -- "내 필기 2건 · 강의자료
+    # 1건" 또는 검색 결과가 없으면 "일반 지식(LLM 사전학습) 기반". 강사 피드백 +
+    # 사용자 질문("이거 그냥 챗봇과 뭐가 다르냐") 반영 -- tier2_result만으론 그 답이
+    # 어디서 왔는지 사용자가 알 길이 없었음. tier2_result가 있을 때만 의미 있음.
     hint_category: str | None  # 힌트 유형(2026-10-08) -- question_answer/new_concept/
     # abbreviated_reminder/general_nudge 중 하나, tier2_result가 있을 때만 의미 있음.
     # 추가 LLM 호출 없이 이미 계산된 assessment 신호 조합으로 결정론적으로 매김.

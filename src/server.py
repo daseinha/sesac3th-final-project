@@ -12,8 +12,10 @@
 import json
 import os
 import threading
+import uuid
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
@@ -21,14 +23,14 @@ from dotenv import load_dotenv
 # 자동 탐색이 안 먹힐 때가 있어서(2026-10-02 실측) 절대경로로 명시한다.
 load_dotenv(dotenv_path=str(Path(__file__).resolve().parent.parent / ".env"))
 
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
 from src.api import ingest_file, ingest_note
 from src.db import (
-    delete_session_notes,
     get_all_notes,
     get_deleted_sessions,
+    get_session_time_range,
     get_today_hints,
     insert_deleted_session,
     record_hint_feedback,
@@ -45,6 +47,33 @@ _HINT_FEEDBACK_LOG = _PROJECT_ROOT / "data" / "hint_feedback_log.jsonl"
 _FEEDBACK_VALUES = {"+", "−", "-", "✓"}
 
 app = FastAPI(title="NoteMate API")
+
+# 파괴적 엔드포인트(/api/delete_session, /api/shutdown) 전용 최소 방어선
+# (2026-10-09, 외부 리뷰 Q2 반영). 로컬 1인용 서비스라 정식 인증/토큰은
+# 발표 이후 과제로 미루고, 지금은 비용이 거의 없는 두 가지만 확인한다.
+_ALLOWED_HOSTS = {"127.0.0.1", "localhost", "::1"}
+_ALLOWED_ORIGINS = {"http://127.0.0.1:8000", "http://localhost:8000"}
+
+
+def _require_local_origin(request: Request) -> None:
+    """1) Host 헤더가 로컬이 아니면 거부(DNS 리바인딩 방어) -- 공격자 도메인이
+    처음엔 자기 서버를 가리키다 DNS TTL이 지나면 127.0.0.1로 바뀌는 공격을
+    막는다. 2) Origin 헤더가 있는데 이 서비스 자신이 아니면 거부 -- 같은
+    PC에서 열려 있는 다른(악성/손상된) 탭이 이 로컬 서버로 blind POST를
+    보내는 걸 막는다. 둘 다 IP(`request.client.host`) 체크만으로는 못
+    막는 경로라는 게 외부 리뷰의 핵심 지적이었음(브라우저를 거친 요청은
+    항상 127.0.0.1에서 나가서 IP 검사를 그냥 통과함).
+
+    `Depends()`로 라우트에 걸어야 한다 -- `@app.middleware("http")` 안에서
+    `HTTPException`을 raise하면 FastAPI의 예외 처리 경로 바깥이라 403이
+    아니라 500으로 나가는 함정이 있다(외부 리뷰 지적, 실제로 맞는 내용).
+    """
+    host = (request.url.hostname or "").lower()
+    if host not in _ALLOWED_HOSTS:
+        raise HTTPException(status_code=403, detail="forbidden host")
+    origin = request.headers.get("origin")
+    if origin and origin not in _ALLOWED_ORIGINS:
+        raise HTTPException(status_code=403, detail="forbidden origin")
 
 
 def _append_hint_event(record: dict) -> None:
@@ -138,6 +167,9 @@ def api_ingest_note(
         "top_score": state.get("top_score"),
         "is_question": state.get("is_question"),
         "tier2_result": state.get("tier2_result"),
+        # 2026-10-09: 이 힌트가 뭘 근거로 만들어졌는지(내 필기/강의자료/일반
+        # 지식) -- 강사 피드백 + 사용자 질문 반영, src/nodes.py 참고.
+        "tier2_sources": state.get("tier2_sources"),
         # 2026-10-08: 프론트엔드가 피드백 버튼 클릭 시 이 origin_ref를 같이 보내야
         # note_chunks.feedback_value에 기록되고, Phase 2(✓ 억제)가 작동한다.
         "origin_ref": origin_ref,
@@ -232,6 +264,7 @@ def api_today_hints(course_id: str = _DEFAULT_COURSE_ID) -> list[dict]:
         {
             "content": h["content"],
             "tier2_result": h["tier2_result"],
+            "tier2_sources": h["tier2_sources"],
             "created_at": h["created_at"].isoformat(),
         }
         for h in hints
@@ -249,6 +282,7 @@ def api_all_notes(course_id: str = _DEFAULT_COURSE_ID) -> list[dict]:
         {
             "content": n["content"],
             "tier2_result": n["tier2_result"],
+            "tier2_sources": n["tier2_sources"],
             "created_at": n["created_at"].isoformat(),
             "client_line_id": n["client_line_id"],
             "origin_ref": n["origin_ref"],
@@ -268,27 +302,45 @@ def api_day_summary(period_key: str = Form(...), course_id: str = Form(_DEFAULT_
     return generate_day_summary(course_id, period_key)
 
 
-@app.post("/api/delete_session")
+@app.post("/api/delete_session", dependencies=[Depends(_require_local_origin)])
 def api_delete_session(
     session_id: str = Form(...),
-    day_key: str = Form(...),
     ordinal: int = Form(...),
-    session_started_at: str = Form(...),
     course_id: str = Form(_DEFAULT_COURSE_ID),
 ) -> dict:
-    """세션 구분선 옆 삭제 버튼(2026-10-08) -- 이 session_id에 속한 필기를
-    DB에서 통째로 지운다. 확인(confirm) 다이얼로그는 프론트엔드가 담당하고,
-    여기선 실제 삭제만 수행한다.
+    """세션 구분선 옆 삭제 버튼(2026-10-08 신설, 2026-10-09 설계 변경).
 
-    day_key/ordinal/session_started_at은 프론트엔드가 그 구분선을 그릴 때
-    이미 계산해둔 값을 그대로 넘겨받는다 -- 필기 행이 다 지워진 뒤에는 "몇
-    번째 세션이었는지"를 note_chunks만으로는 더 이상 알 수 없으므로, 삭제
-    직전에 이 값들을 묘비(deleted_sessions)로 같이 남겨서 재구성 시 번호가
-    안 꼬이게 한다(사용자 요청, CLAUDE.md 참고).
+    **더 이상 note_chunks를 실제로 지우지 않는다** -- 사용자 결정: "그것도
+    데이터인데 아예 복구 못 하고 기록도 못 보게 없애는 건 아닌 것 같다.
+    그 경우의 수도 많지 않을 거고(보통 하루에 과목당 세션 하나)". 화면/
+    새로고침 재구성에서 숨기는 역할은 `deleted_sessions`에 올리는 것만으로
+    충분하다(`get_all_notes()`가 거기 올라간 session_id를 걸러냄).
+
+    `day_key`/`session_started_at`은 더 이상 프론트가 보내지 않는다 -- 외부
+    리뷰(Claude웹+Gemini) 지적: "그 값들은 서버가 원본 행에서 직접 도출할
+    수 있으니 클라이언트를 신뢰하지 말라". `get_session_time_range()`로
+    그 세션의 가장 이른 필기 시각을 서버가 직접 구하고, KST로 변환해서
+    `day_key`를 만든다 -- UTC 그대로 쓰면 자정~오전9시 세션이 전날로 밀리는
+    버그가 생긴다(같은 리뷰 지적). 세션에 필기가 하나도 없으면(만들자마자
+    지운 빈 세션) 묘비를 남기지 않는다 -- 시작 시각을 현재 시각으로
+    날조하면 묘비가 엉뚱한 위치에 나타나는 조용한 데이터 오류가 되므로.
+
+    `ordinal`만은 "생성 시점에 클라이언트가 매긴 순번"이라 서버가 대신 구할
+    방법이 없어 그대로 신뢰한다(양쪽 리뷰 공통 결론, 레이스 가능성은
+    로컬 1인용 규모에서 무시 가능하다고 판단).
     """
-    deleted = delete_session_notes(session_id)
-    insert_deleted_session(session_id, course_id, day_key, ordinal, session_started_at)
-    return {"ok": True, "deleted": deleted}
+    try:
+        uuid.UUID(session_id)
+    except (ValueError, AttributeError, TypeError):
+        raise HTTPException(status_code=400, detail="invalid session_id")
+
+    started_at = get_session_time_range(session_id)
+    if started_at is None:
+        return {"ok": True, "tombstoned": False}
+
+    day_key = started_at.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y%m%d")
+    insert_deleted_session(session_id, course_id, day_key, ordinal, started_at.isoformat())
+    return {"ok": True, "tombstoned": True}
 
 
 @app.get("/api/deleted_sessions")
@@ -316,15 +368,18 @@ def api_end_session(session_id: str = Form(...)) -> dict:
     return {"ok": True}
 
 
-@app.post("/api/shutdown")
+@app.post("/api/shutdown", dependencies=[Depends(_require_local_origin)])
 def api_shutdown() -> dict:
     """"필기 종료" 버튼이 세션 종료 다음으로 호출 -- 서버 프로세스 자체를 내린다.
 
     로컬 1인용 서비스라 HTTP 요청으로 서버를 내리는 걸 허용한다(2026-10-08,
     [[deferred-launch-exit-ux]] -- 여러 사용자가 쓰는 서비스였다면 위험한
-    패턴이라 하지 않았을 것). 이 요청의 응답이 먼저 클라이언트에 전달돼야
-    하므로, 핸들러 안에서 바로 종료하지 않고 아주 짧게 지연시킨 뒤
-    `os._exit()`로 즉시 종료한다 -- 로컬 dev 서버라 정상적인 연결 드레이닝
+    패턴이라 하지 않았을 것). Origin/Host 검증은 2026-10-09 외부 리뷰 반영
+    (`_require_local_origin` 참고) -- 같은 PC의 다른 탭이 blind POST로
+    서버를 끄는 것까지는 막아야 한다고 판단. 이 요청의 응답이 먼저
+    클라이언트에 전달돼야 하므로, 핸들러 안에서 바로 종료하지 않고 아주
+    짧게 지연시킨 뒤 `os._exit()`로 즉시 종료한다 -- 로컬 dev 서버라 정상적인
+    연결 드레이닝
     없이 바로 꺼져도 문제없음.
     """
     threading.Timer(0.3, lambda: os._exit(0)).start()

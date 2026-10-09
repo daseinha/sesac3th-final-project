@@ -321,7 +321,14 @@
     <button onclick="closeHintPopover()" id="hint-popover-close" style="position: absolute; top: 8px; right: 10px; background: none; border: none; cursor: pointer; color: var(--color-badge-text); font-size: 14px; line-height: 1; padding: 2px;">×</button>
     <div style="display: flex; gap: 8px; align-items: flex-start; padding-right: 14px;">
       <span id="hint-popover-icon" style="margin-top: 2px; flex-shrink: 0;"></span>
-      <div id="hint-popover-text"></div>
+      <div>
+        <div id="hint-popover-text"></div>
+        <!-- 이 힌트가 뭘 근거로 만들어졌는지(내 필기/강의자료/일반 지식)
+             표시(2026-10-09, 강사 피드백 + 사용자 질문 반영: "그냥 챗봇과
+             뭐가 다르냐"는 의문에 답이 되는 투명성 -- 근거가 있을 때는
+             개인화가 실제로 작동한다는 증거, 없을 때는 그것도 솔직하게). -->
+        <div id="hint-popover-sources" style="margin-top: 5px; font-size: 11px; opacity: 0.7;"></div>
+      </div>
     </div>
     <!-- 피드백 버튼: 에이전트단 메시지를 클릭해서 펼쳤을 때만 보인다(호버 미리보기에는 없음). 라우팅에는 연결하지 않고 기록만 한다. -->
     <div id="hint-feedback" style="display: none; gap: 6px; margin-top: 10px; justify-content: flex-end;"></div>
@@ -530,6 +537,7 @@
   const agentStatus = document.getElementById('agent-status');
   const hintPopover = document.getElementById('hint-popover');
   const hintPopoverText = document.getElementById('hint-popover-text');
+  const hintPopoverSources = document.getElementById('hint-popover-sources');
   const hintPopoverIcon = document.getElementById('hint-popover-icon');
   const hintPopoverClose = document.getElementById('hint-popover-close');
   const summaryPopover = document.getElementById('summary-popover');
@@ -595,9 +603,26 @@
     syncThemeIcon();
   });
 
-  // 필기 종료 -- 2026-10-08, [[deferred-launch-exit-ux]]. submitNote/typingNode는
-  // 아래쪽에서 정의되지만, 이 클릭 핸들러는 사용자가 실제로 눌렀을 때만
-  // 실행되니(그때는 전체 스크립트가 이미 다 로드됨) 문제없음.
+  // 필기 종료 -- 2026-10-08, [[deferred-launch-exit-ux]]. submitNote/typingNode/
+  // pendingSubmitCount는 아래쪽에서 정의되지만, 이 클릭 핸들러는 사용자가
+  // 실제로 눌렀을 때만 실행되니(그때는 전체 스크립트가 이미 다 로드됨) 문제없음.
+  //
+  // Enter는 submitNote()를 await 없이 쏘기 때문에, "줄 쓰고 Enter -> 바로
+  // 필기 종료"를 하면 typingNode는 이미 Enter가 만든 새 빈 줄로 넘어가
+  // 있어서 아래 "입력 중이던 줄 저장" 체크를 피해가고, 그 전 줄의 제출이
+  // 서버에서 아직 처리 중(Tier2면 최대 16~20초)인데 서버가 꺼져서 그 줄이
+  // 통째로 날아갈 수 있다(2026-10-09, 외부 리뷰 Q3 추가 항목 -- 실제
+  // 재현 경로를 코드에서 확인함). pendingSubmitCount가 0이 될 때까지
+  // 기다렸다가 종료를 진행 -- 최대 20초만 기다리고(Tier2 최장 시간 기준)
+  // 그 이상이면 포기하고 진행한다(안전판 수준이라 완벽한 보장은 아님,
+  // 사용자 판단: "시연에서 거의 안 일어날 경우의 수, 그래도 안전판으로").
+  async function waitForPendingSubmits(timeoutMs = 20000) {
+    const start = Date.now();
+    while (pendingSubmitCount > 0 && Date.now() - start < timeoutMs) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+  }
+
   const endSessionBtn = document.getElementById('end-session-btn');
   endSessionBtn.addEventListener('click', async () => {
     endSessionBtn.disabled = true;
@@ -608,6 +633,7 @@
       if (typingNode && typingNode.textContent.trim()) {
         await submitNote(typingNode);
       }
+      await waitForPendingSubmits();
       await fetch('/api/end_session', { method: 'POST', body: new URLSearchParams({ session_id: SESSION_ID }) });
       // "정상 종료였음"을 남겨둔다 -- 다음에 서비스를 다시 켜면 이 표시를 보고
       // 자동으로 새 세션 구분선을 찍어준다(2026-10-08, "정상종료 후 재시작은
@@ -709,7 +735,7 @@
   // 에이전트단에만 자리를 만들고 필기단엔 대응하는 게 없으면, 그 뒤로 모든
   // 마커의 "같은 높이" 계산이 틀어짐(2026-10-02 실측 버그). "바로 물어보기"
   // 답변도 이제 필기단에 작은 표시줄을 만들어서 이 함수에 그대로 태움.
-  function addMarkerPair(node, text, variant = 'hint', originRef = null) {
+  function addMarkerPair(node, text, variant = 'hint', originRef = null, tier2Sources = null) {
     const svg = variant === 'ask' ? askSvg : lightbulbSvg;
     const noteMarker = document.createElement('button');
     noteMarker.innerHTML = svg;
@@ -734,7 +760,7 @@
     // 같이 줄어들어야 좌표가 계속 맞음.
     hintTrack.style.height = noteBody.scrollHeight + 'px';
 
-    wireMarkerPair(noteMarker, agentMarker, text, variant, { originRef });
+    wireMarkerPair(noteMarker, agentMarker, text, variant, { originRef, tier2Sources });
     return { noteMarker, agentMarker };
   }
 
@@ -744,7 +770,7 @@
   // 전체 로딩이 끝난 뒤 한 번만 갱신한다(수천 번 반복 갱신 방지).
   // originRef: 이 힌트가 달린 필기 줄의 note_chunks.origin_ref -- 피드백
   // 버튼이 보내는 요청에 실어서 보내야 실제로 DB에 반영된다(2026-10-08).
-  function wireMarkerPair(noteMarker, agentMarker, text, variant, { skipUIUpdate = false, isToday = true, originRef = null } = {}) {
+  function wireMarkerPair(noteMarker, agentMarker, text, variant, { skipUIUpdate = false, isToday = true, originRef = null, tier2Sources = null } = {}) {
     const onClick = (ev, marker) => { ev.stopPropagation(); showHintPopover(marker, text, variant); };
     noteMarker.onclick = (ev) => onClick(ev, noteMarker);
     agentMarker.onclick = (ev) => onClick(ev, agentMarker);
@@ -765,7 +791,7 @@
       });
     });
 
-    markerPairs.push({ noteMarker, agentMarker, read: false, variant, text, feedbackValue: null, isToday, originRef });
+    markerPairs.push({ noteMarker, agentMarker, read: false, variant, text, feedbackValue: null, isToday, originRef, tier2Sources });
     // "바로 물어보기"(ask)는 필기 줄이 아니라 즉석 질문이라 "오늘 N줄 중
     // 힌트 M줄" 통계엔 안 넣는다 -- 실제 필기에 달린 넛지만 집계.
     if (variant === 'hint') {
@@ -836,6 +862,16 @@
     if (!notice && !preview) markPairRead(markerEl);
 
     hintPopoverText.textContent = text;
+    // markerEl로 markerPairs에서 이 힌트의 근거 요약을 찾아 같이 보여준다 --
+    // showHintPopover() 호출부가 여러 곳(클릭/호버/알림)이라 매번 넘기는
+    // 대신 여기서 한 번만 조회(2026-10-09).
+    const sourcePair = markerPairs.find((p) => p.noteMarker === markerEl || p.agentMarker === markerEl);
+    if (sourcePair && sourcePair.tier2Sources) {
+      hintPopoverSources.textContent = `근거: ${sourcePair.tier2Sources}`;
+      hintPopoverSources.style.display = 'block';
+    } else {
+      hintPopoverSources.style.display = 'none';
+    }
     renderHintFeedback(markerEl, text, variant, preview);
     hintPopoverIcon.innerHTML = variant === 'ask' ? askSvg : lightbulbSvg;
     if (variant === 'ask') {
@@ -1067,11 +1103,64 @@
     return clone.textContent.trim();
   }
 
+  // Enter를 치면 submitNote()가 await 없이(fire-and-forget) 호출된다 --
+  // 그 요청이 서버에서 처리되는 동안(Tier2면 최대 16~20초) "필기 종료"를
+  // 누르면, typingNode는 이미 Enter가 만든 새 빈 줄로 넘어가 있어서
+  // 종료 핸들러의 "입력 중이던 줄 저장" 체크를 통과 못 하고, 서버가
+  // 바로 꺼지면서 방금 제출한 줄이 통째로 날아갈 수 있다(2026-10-09,
+  // 외부 리뷰 Q3 추가 항목에서 지적 -- 실제 코드에서 경로 확인함). 이
+  // 카운터로 "지금 몇 개의 제출이 아직 서버 응답을 못 받았는지"를 추적해서,
+  // 종료 핸들러가 0이 될 때까지 기다리게 한다.
+  let pendingSubmitCount = 0;
+
+  // 세션 전체 테스트 모드(2026-10-09, 사용자 요청) -- `test::` 줄단위 태그와
+  // 별개로, 세션 아무 줄에서나(보통 세션 첫 줄) `test::on`을 입력하면 그
+  // 시점부터 "새 필기 시작"으로 다음 세션을 열기 전까지 이 세션의 모든
+  // 줄이 자동으로 건너뛰어진다. `test::off`로 중간에 다시 끌 수도 있음.
+  // startNewSession()이 다음 세션을 열 때 false로 리셋.
+  let sessionTestMode = false;
+
   async function submitNote(node) {
     const text = getNodeTextPreservingBreaks(node);
     if (!text) return;
 
     removeMarkerPairForNode(node);
+
+    // 테스트/스크래치 입력 표시(2026-10-09, 사용자 제안) -- 태그가 있으면
+    // 백엔드 호출(임베딩/LLM 판단/DB 저장) 자체를 건너뛴다. "테스트 데이터는
+    // RAG에 넣을 필요도 없다"는 지적 반영 -- 과목 분리(별도 course_id) 같은
+    // 중간 단계도 필요 없이, 그냥 아예 안 보낸다. 새로고침하면 사라짐(저장
+    // 자체를 안 하므로 당연함, 스크래치 용도라 문제없음). 세 가지 약속어:
+    //   - `test::`      줄 하나만 건너뜀(개별 적용)
+    //   - `test::on`    이 줄부터 세션 전체가 테스트 모드(세션 첫 줄에 넣으면
+    //                   "세션 시작부터 전체 적용"도 자연히 됨)
+    //   - `test::off`   세션 테스트 모드 해제(이 줄 자체도 저장 안 함)
+    const TEST_TAG = 'test::';
+    const TEST_ON_TAG = 'test::on';
+    const TEST_OFF_TAG = 'test::off';
+    if (text.startsWith(TEST_ON_TAG)) {
+      sessionTestMode = true;
+      node.style.opacity = '0.55';
+      node.title = '세션 테스트 모드 시작 -- 저장되지 않음 (test::off로 해제)';
+      setAgentStatus('세션 테스트 모드 켜짐', { autoReset: true });
+      return;
+    }
+    if (text.startsWith(TEST_OFF_TAG)) {
+      sessionTestMode = false;
+      node.style.opacity = '0.55';
+      node.title = '세션 테스트 모드 해제 -- 이 줄도 저장되지 않음';
+      setAgentStatus('세션 테스트 모드 해제됨', { autoReset: true });
+      return;
+    }
+    if (sessionTestMode || text.startsWith(TEST_TAG)) {
+      node.style.opacity = '0.55';
+      node.title = sessionTestMode
+        ? '세션 테스트 모드 중 -- 저장되지 않음'
+        : '테스트 입력(test::) -- 저장되지 않음';
+      setAgentStatus('테스트 입력 -- 저장 안 함', { autoReset: true });
+      return;
+    }
+
     setAgentStatus('방금 쓰신 내용 생각 중...');
     setServiceStatus('필기 처리 중...', 'busy');
 
@@ -1086,8 +1175,14 @@
       content: text, course_id: COURSE_ID, session_id: SESSION_ID,
       client_line_id: node.dataset.lineId,
     });
+    pendingSubmitCount++;
     try {
-      const res = await fetch('/api/ingest_note', { method: 'POST', body });
+      // keepalive: true -- 이 fetch가 아직 끝나기 전에 사용자가 탭/창을
+      // 닫아도(예: "필기 종료" 대신 그냥 X로 닫는 경우) 브라우저가 이 요청
+      // 자체는 끝까지 보내준다(sendBeacon과 같은 원리). 본문이 짧은 텍스트
+      // 한 줄이라 keepalive의 크기 제한(약 64KB)에 걸릴 일은 없음
+      // (2026-10-09, 외부 리뷰 보강 아이디어).
+      const res = await fetch('/api/ingest_note', { method: 'POST', body, keepalive: true });
       const result = await res.json();
       // 이 필기는 이제 서버의 "오늘 필기" 목록에도 들어있다 -- 폴링이 이걸
       // "아직 화면에 없는 새 필기"로 오인해서 중복으로 또 그리지 않도록
@@ -1098,7 +1193,7 @@
       node.dataset.time = formatClock();
       updateNoteStatus();
       if (result.routing_decision === 'tier2' && result.tier2_result) {
-        const { agentMarker } = addMarkerPair(node, result.tier2_result, 'hint', result.origin_ref);
+        const { agentMarker } = addMarkerPair(node, result.tier2_result, 'hint', result.origin_ref, result.tier2_sources);
         showHintPopover(agentMarker, result.tier2_result, 'hint', { notice: true, autoCloseMs: 500 });
         setAgentStatus('힌트 하나 작성 완료', { autoReset: true });
       } else {
@@ -1108,6 +1203,7 @@
       setAgentStatus('서버 연결 실패 — ' + e);
     } finally {
       setServiceStatus('세션 진행 중', 'idle');
+      pendingSubmitCount--;
     }
   }
 
@@ -1123,6 +1219,12 @@
   // 그 자리에 그대로 생기니 기존 "중간 삽입" 동작은 안 건드림.
   noteBody.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || e.shiftKey) return;
+    // 한글 등 IME 조합 중에 누르는 Enter는 "조합 확정"용일 수 있다 --
+    // 이 핸들러가 가로채서 preventDefault하면 조합이 깨지거나 두 번
+    // 제출될 위험이 있다(2026-10-09, 외부 리뷰 Q3 지적 -- 이 서비스는
+    // 한글 입력이 주 사용 환경이라 실제로 중요한 경로). 조합 중이면
+    // 네이티브 동작에 그대로 맡긴다.
+    if (e.isComposing) return;
     const sel = window.getSelection();
     if (!sel.rangeCount) return;
     let node = sel.anchorNode;
@@ -1130,8 +1232,6 @@
     if (!node || node.nodeName !== 'P') return;
 
     e.preventDefault();
-    node.classList.remove('typing-active');
-    if (typingNode === node) typingNode = null;
 
     let insertAfter = node;
     while (insertAfter.nextElementSibling && insertAfter.nextElementSibling.contentEditable === 'false') {
@@ -1151,17 +1251,15 @@
     sel.addRange(range);
 
     // preventDefault로 직접 만든 거라 네이티브 input 이벤트가 안 떠서,
-    // "지금 타이핑 중" 표시를 여기서 직접 걸어줌(기존엔 브라우저 기본
-    // 동작이 input을 발생시켜 자동으로 걸렸었음). 같은 이유로 'input'
-    // 리스너(jumpToLive)에 의존하는 "타이핑 따라가는 자동 스크롤"도 Enter를
-    // 칠 때는 전혀 안 걸리고 있었다(2026-10-08 실측: "엔터로 줄바꿔도 화면이
-    // 안 내려간다"는 지적 -- 원인이 여기였음, 일반 타이핑은 네이티브 input
-    // 이벤트가 떠서 걸렸는데 Enter만 이 핸들러가 가로채 버려서 빠짐). 여기서
-    // 직접 호출해서 보충한다.
-    newP.classList.add('typing-active');
-    typingNode = newP;
-    if (noteScroll.style.paddingBottom) noteScroll.style.paddingBottom = '';
-    scrollNodeIntoView(typingNode);
+    // 합성 input을 직접 발행해 기존 'input' 리스너들(타이핑 표시 갱신,
+    // padding-bottom 정리, 자동 스크롤, cleanupOrphanedMarkers)이 평소
+    // 타이핑처럼 한 번에 걸리게 한다 -- 전에는 그 후처리들을 여기서 하나씩
+    // 수동으로 다시 호출했는데(2026-10-08), 'input' 리스너가 하나 늘 때마다
+    // 여기도 같이 고쳐야 하는 구조라 반복적으로 버그가 났다(실제로
+    // "엔터 쳐도 화면이 안 내려간다" 버그가 이 패턴에서 나왔음). 리스너가
+    // 선택 영역(`window.getSelection()`)을 직접 읽으므로, 그 전에 캐럿을
+    // newP로 옮겨둔 지금이 바로 발행할 시점(2026-10-09, 외부 리뷰 반영).
+    newP.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertParagraph' }));
 
     submitNote(node);
   });
@@ -1280,7 +1378,7 @@
   // 지적 반영). 이러면 addMarkerPair()의 기존 짝짓기 로직을 그대로 재사용
   // 가능 -- 필기단/에이전트단 둘 다 실제로 존재하는 요소를 기준으로 하니
   // 좌표가 안 틀어짐. 수정 못 하게 contenteditable=false로 고정.
-  function addAskLine(answerText, originRef) {
+  function addAskLine(answerText, originRef, tier2Sources) {
     const line = document.createElement('p');
     line.contentEditable = 'false';
     line.style.cssText = 'margin: 0 0 1.4em; display: flex; align-items: center; gap: 6px; color: var(--color-ask-accent); font-size: 13px;';
@@ -1298,7 +1396,7 @@
     } else {
       noteBody.appendChild(line);
     }
-    const { agentMarker } = addMarkerPair(line, answerText, 'ask', originRef);
+    const { agentMarker } = addMarkerPair(line, answerText, 'ask', originRef, tier2Sources);
     // 생성 즉시 펼쳐서 바로 보여준 뒤, 잠시 뒤 자동으로 접어서 아이콘만
     // 남긴다(나중에 다시 클릭하면 또 볼 수 있음) -- 위치는 이제 억지로
     // 맨 아래 고정이 아니라 생긴 시점 그대로, 화면에 보이면 자연스럽게 보임.
@@ -1325,7 +1423,7 @@
       const res = await fetch('/api/ingest_note', { method: 'POST', body });
       const result = await res.json();
       askAnswer.style.display = 'none';
-      addAskLine(result.tier2_result || '조용히 저장됐어요 (충분히 익숙한 내용이에요).', result.origin_ref);
+      addAskLine(result.tier2_result || '조용히 저장됐어요 (충분히 익숙한 내용이에요).', result.origin_ref, result.tier2_sources);
       setAgentStatus('답변 작성 완료', { autoReset: true });
     } catch (err) {
       askAnswer.textContent = '서버 연결 실패 — ' + err;
@@ -1475,35 +1573,38 @@
     // 라벨이 달라지지 않는다.
     const timeLabel = formatClock(n.created_at);
     divider.innerHTML = `<span style="flex-shrink:0; font-weight:600;">${formatUnitLabel(unitKey)} ${timeLabel} · ${ordinal}번째 필기</span><span style="flex-grow:1; height:1px; background:var(--color-border);"></span>`;
-    divider.appendChild(makeDeleteSessionBtn(n.session_id, divider, ordinal, unitKey, n.created_at));
+    divider.appendChild(makeDeleteSessionBtn(n.session_id, divider, ordinal, unitKey));
     noteBody.appendChild(divider);
   }
 
   // 세션 구분선 옆 삭제 버튼(2026-10-08, "새 필기 시작으로 세션을 나눌 수
-  // 있게 됐으니 세션 단위로 지울 수도 있어야 한다"는 요청). 되돌릴 수 없는
-  // 삭제라 confirm()으로 한 번 더 확인한다. 날짜 구분선(첫 세션)에는 일부러
+  // 있게 됐으니 세션 단위로 지울 수도 있어야 한다"는 요청). 2026-10-09부터
+  // note_chunks 원본은 더 이상 지우지 않음(사용자 결정: "그것도 데이터인데
+  // 아예 복구 못하고 기록도 못 보게 없애는 건 아닌 것 같다") -- 화면/
+  // 타임라인에서만 사라지고 DB에는 보존됨. 그래도 화면 되돌리기는 안 되는
+  // 일방향 동작이라 confirm()으로 한 번 더 확인한다. 날짜 구분선(첫 세션)에는 일부러
   // 안 붙인다 -- 과거 재생 데이터처럼 session_id가 없는 날과 섞여 있어서,
   // 같은 자리에 버튼을 두면 "이 버튼이 그날 전체를 지우는 건지 세션만
   // 지우는 건지" 헷갈릴 위험이 있음. 지금은 session_id가 확실한 2번째
   // 세션부터만 지원.
-  function makeDeleteSessionBtn(sessionId, divider, ordinal, dayKey, sessionStartedAt) {
+  function makeDeleteSessionBtn(sessionId, divider, ordinal, dayKey) {
     const btn = document.createElement('button');
     btn.textContent = '🗑';
-    btn.title = '이 세션의 필기를 전부 삭제합니다(되돌릴 수 없음)';
+    btn.title = '이 세션의 필기를 화면에서 치웁니다(원본은 DB에 보존됨)';
     btn.style.cssText = 'flex-shrink:0; background:none; border:none; color:var(--color-text-muted); cursor:pointer; font-size:13px; padding:2px 4px; opacity:0.6;';
     btn.onclick = async (ev) => {
       ev.stopPropagation();
-      if (!confirm('이 세션에 속한 필기를 전부 삭제할까요? 되돌릴 수 없습니다.')) return;
+      if (!confirm('이 세션을 화면/타임라인에서 치울까요? (원본 데이터는 DB에 그대로 남고, 화면에서만 사라집니다)')) return;
       btn.disabled = true;
       btn.textContent = '...';
       try {
-        // day_key/ordinal/session_started_at을 같이 넘긴다 -- 필기 행이
-        // 다 지워지고 나면 "몇 번째 세션이었는지"를 서버가 더는 알 수
-        // 없으므로, 지금 알고 있는 값을 그대로 넘겨서 묘비(deleted_sessions)
-        // 로 남긴다(2026-10-08, 아래 사용자 요청 참고).
+        // ordinal만 보낸다 -- day_key/session_started_at은 2026-10-09부터
+        // 서버가 note_chunks 원본 행에서 직접 도출한다(외부 리뷰 Q1 반영:
+        // "그 값들은 클라이언트가 아니라 서버가 구해야 한다"). ordinal은
+        // "생성 시점에 매겨진 순번"이라 서버가 대신 구할 길이 없어 그대로
+        // 신뢰(양쪽 리뷰 공통 결론).
         const body = new URLSearchParams({
-          session_id: sessionId, day_key: dayKey, ordinal: String(ordinal),
-          session_started_at: sessionStartedAt, course_id: COURSE_ID,
+          session_id: sessionId, ordinal: String(ordinal), course_id: COURSE_ID,
         });
         const res = await fetch('/api/delete_session', { method: 'POST', body });
         const result = await res.json();
@@ -1603,6 +1704,7 @@
   // 본인이 의도한 동작이라 되돌릴 필요가 없음).
   function startNewSession({ autoTriggered = false } = {}) {
     SESSION_ID = crypto.randomUUID();
+    sessionTestMode = false; // 새 세션은 기본적으로 테스트 모드 아님(이전 세션 설정이 안 넘어옴)
 
     const now = new Date();
     const todayKey = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
@@ -1646,7 +1748,7 @@
     // 날짜 구분선과 합쳐지는 그날 첫 세션(ordinal 1)에는 안 붙인다 --
     // insertSessionDivider()와 같은 이유(위 설명 참고).
     if (sessionOrdinalToday > 1) {
-      divider.appendChild(makeDeleteSessionBtn(SESSION_ID, divider, sessionOrdinalToday, todayKey, now.toISOString()));
+      divider.appendChild(makeDeleteSessionBtn(SESSION_ID, divider, sessionOrdinalToday, todayKey));
     }
 
     noteBody.appendChild(divider);
@@ -1699,7 +1801,7 @@
     if (n.session_id) p.dataset.sessionId = n.session_id;
     if (isToday(n.created_at)) p.dataset.isToday = '1';
     noteBody.appendChild(p);
-    return n.tier2_result ? { ...addMarkerPair(p, n.tier2_result, 'hint', n.origin_ref), text: n.tier2_result } : null;
+    return n.tier2_result ? { ...addMarkerPair(p, n.tier2_result, 'hint', n.origin_ref, n.tier2_sources), text: n.tier2_result } : null;
   }
 
   // renderNote()와 거의 같지만, 에이전트단 마커(agentMarker)의 위치 계산
@@ -1732,7 +1834,7 @@
     noteMarker.contentEditable = 'false'; // addMarkerPair와 동일한 이유(위 주석 참고)
     p.appendChild(noteMarker);
 
-    return { p, noteMarker, text: n.tier2_result, isToday: isToday(n.created_at), originRef: n.origin_ref };
+    return { p, noteMarker, text: n.tier2_result, isToday: isToday(n.created_at), originRef: n.origin_ref, tier2Sources: n.tier2_sources };
   }
 
   // 실제 캘린더 날짜(로컬) 기준 "오늘"인지 -- 날짜 구분선과는 별개로, 하단
@@ -1809,10 +1911,26 @@
   // loadTodayNotes), 하루 지나 다시 켜면 화면이 또 텅 비어서 "이어서 쓰는
   // 필기장"이라는 서비스 취지와 안 맞는다는 지적으로 날짜 제한을
   // 없앴다(2026-10-08, api.py의 get_all_notes() 참고).
+  // 서버가 일시적으로 안 받아주거나(재시작 중/DB 락 등) 응답이 평소보다
+  // 오래 걸리면, 그냥 fetch는 사용자 입장에서 "필기 불러오는 중..."이 영원히
+  // 안 끝나는 것처럼 보인다(2026-10-09 실측: 서버 재배포 타이밍과 겹쳐 로딩
+  // 화면이 멈춘 것처럼 보였던 사례 -- 끄기 버튼도 응답이 없어 당황스러웠을
+  // 것). 일정 시간 안에 응답이 없으면 스스로 포기하고 에러로 처리하도록
+  // AbortController로 타임아웃을 건다.
+  async function fetchWithTimeout(url, timeoutMs = 15000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, { signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async function loadAllNotes() {
     const [notesRes, tombstonesRes] = await Promise.all([
-      fetch(`/api/all_notes?course_id=${encodeURIComponent(COURSE_ID)}`),
-      fetch(`/api/deleted_sessions?course_id=${encodeURIComponent(COURSE_ID)}`),
+      fetchWithTimeout(`/api/all_notes?course_id=${encodeURIComponent(COURSE_ID)}`),
+      fetchWithTimeout(`/api/deleted_sessions?course_id=${encodeURIComponent(COURSE_ID)}`),
     ]);
     const notes = await notesRes.json();
     const tombstones = await tombstonesRes.json();
@@ -1841,13 +1959,13 @@
       if (r) pending.push(r);
     });
     const diff = viewportOffsetDiff(); // 읽기 전용 구간 시작
-    pending.forEach(({ p, noteMarker, text, isToday, originRef }) => {
+    pending.forEach(({ p, noteMarker, text, isToday, originRef, tier2Sources }) => {
       const agentMarker = document.createElement('button');
       agentMarker.innerHTML = lightbulbSvg;
       agentMarker.setAttribute('aria-label', '이 필기에 대한 코멘트 보기');
       agentMarker.style.cssText = `position:absolute; left:0; top:${p.offsetTop + diff}px; padding:2px; background:none; border:none; cursor:pointer; opacity:0.75;`;
       hintTrack.appendChild(agentMarker);
-      wireMarkerPair(noteMarker, agentMarker, text, 'hint', { skipUIUpdate: true, isToday, originRef });
+      wireMarkerPair(noteMarker, agentMarker, text, 'hint', { skipUIUpdate: true, isToday, originRef, tier2Sources });
     });
     hintTrack.style.height = noteBody.scrollHeight + 'px';
     todayLineCount = notes.filter((n) => isToday(n.created_at)).length;
@@ -1942,7 +2060,21 @@
   }
   setInterval(pollForNewNotes, 3000);
 
-  loadAllNotes();
+  // 실패해도(타임아웃/네트워크 끊김 등) "필기 불러오는 중..."이 영원히
+  // 떠있지 않게, 실패를 눈에 보이는 에러 + 재시도 버튼으로 바꾼다
+  // (2026-10-09 실측 -- 원인 불명의 로딩 멈춤이 있었는데, 끄기 버튼까지
+  // 먹통처럼 보여서 당황스러웠다는 지적 반영. 근본 원인은 서버 재배포
+  // 타이밍과 겹친 걸로 추정되지만, 어떤 이유로든 또 실패하면 이젠 최소한
+  // "멈춘 게 아니라 실패했고 다시 시도할 수 있다"는 게 보임).
+  loadAllNotes().catch((e) => {
+    console.error('loadAllNotes 실패:', e);
+    const loadingNotice = document.getElementById('note-loading');
+    if (loadingNotice) {
+      loadingNotice.innerHTML =
+        '<span style="color: var(--color-danger);">필기를 불러오지 못했어요 -- 서버 연결을 확인해주세요.</span>' +
+        '<button onclick="location.reload()" style="margin-left:8px; background:var(--color-surface); border:1px solid var(--color-border-input); border-radius:6px; padding:3px 10px; font-size:12px; cursor:pointer;">다시 시도</button>';
+    }
+  });
 
   // 테스트 전용: DB는 그대로 두고 화면(필기창 + 마커 + 팝오버)만 비운다.
   // renderedCount는 일부러 안 건드린다 -- 서버엔 이미 저장돼 있는 필기들이라,

@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from src.db import insert_note_chunk, search_top_similarity
 from src.llm import embed_text, invoke_chat, invoke_structured
 from src.retrieval import build_hybrid_retriever
-from src.routers import compute_routing_decision
+from src.routers import LOW_THRESHOLD, compute_routing_decision
 from src.session_memory import add_to_session, check_session_duplicate
 from src.state import NoteAssessment, NoteMateState
 
@@ -150,6 +150,42 @@ _TIER2_SYSTEM_PROMPT = (
     "- 장황하게 설명하지 말고, 카드 한 장에 들어갈 정도로 간결하게 작성하세요."
 )
 
+# 힌트가 "어디서 온 답인지" 사용자에게 보여주기 위한 라벨(2026-10-09, 강사님
+# 피드백 + 사용자 질문 반영 -- "이 힌트가 RAG인지 LLM 사전학습 지식인지
+# 구분해서 보여주면 유용하다"). source 값별 한국어 표기만 담당 -- 실제 개수
+# 집계는 아래 _summarize_tier2_sources()가 담당.
+_SOURCE_LABELS = {"personal": "내 필기", "base": "강의자료", "stt_reference": "참고자료"}
+
+
+def _summarize_tier2_sources(similar_docs: list) -> str:
+    """검색된 참고 문서들의 source 구성을 사용자가 읽을 짧은 문구로 요약.
+
+    "비율"(답변 텍스트의 몇 %가 어디서 왔는지)은 LLM이 그렇게 출처를 태깅하며
+    글을 쓰지 않아서 측정 자체가 불가능 -- 대신 "실제로 검색돼서 LLM에게
+    참고자료로 제공된 문서가 몇 건, 어떤 source였는지"를 보여준다(과장 없는
+    정직한 근사치). 검색 결과가 하나도 없으면 LLM이 자기 사전학습 지식으로만
+    답한 것이므로 그렇게 표시한다. 웹검색은 Tier2에 아직 없는 기능이라
+    ([[deferred-web-search-addon]]) 포함하지 않음 -- 있는 척하면 거짓 표시가 됨.
+
+    2026-10-09 실측 수정: 하이브리드 검색이 유사도와 무관하게 "코퍼스에 뭐든
+    있으면 top-k를 무조건 반환"하는 특성 때문에, 완전히 무관한 내용(예: 부트
+    캠프와 무관한 "양자컴퓨터 표면코드" 질문)에도 "내 필기 9건"처럼 뜨는 문제를
+    실제로 확인함(BM25 쪽 키워드 우연 일치가 대부분). 벡터 쪽엔 유사도 점수가
+    있으니(`metadata['similarity']`), 라우팅에서 이미 쓰는 `LOW_THRESHOLD`
+    (새 임의의 숫자를 만들지 않고 기존 검증된 값 재사용)보다 낮은 매치는
+    "근거"로 안 센다. BM25 전용 매치(벡터 점수가 없는 것, `similarity is None`)
+    는 신뢰할 점수가 없어서 같이 제외 -- 이번 실측에서 바로 이런 매치들이
+    키워드만 우연히 겹친 가짜 근거였음.
+    """
+    relevant_docs = [d for d in similar_docs if (d.metadata.get("similarity") or 0) >= LOW_THRESHOLD]
+    if not relevant_docs:
+        return "일반 지식(LLM 사전학습) 기반"
+    counts: dict[str, int] = {}
+    for d in relevant_docs:
+        source = d.metadata.get("source") or "personal"
+        counts[source] = counts.get(source, 0) + 1
+    return " · ".join(f"{_SOURCE_LABELS.get(s, s)} {n}건" for s, n in counts.items())
+
 
 def tier2_deep_agent(state: NoteMateState) -> dict:
     """Tier2: 확신도 낮거나 명시적 질문일 때만 실행되는 딥 에이전트.
@@ -159,6 +195,12 @@ def tier2_deep_agent(state: NoteMateState) -> dict:
       가져와 LLM에 컨텍스트로 제공. 벡터 검색만으론 "의미는 비슷한데 정확한
       용어가 다른" 경우를 놓칠 수 있어서, 키워드 기반 BM25로 보완한다.
     - LLM이 그 근거를 바탕으로 힌트(tier2_result)를 생성 -- 이게 "앵커 카드 보강" 내용.
+    - `tier2_sources`: 그 힌트가 뭘 근거로 만들어졌는지(내 필기/강의자료/일반
+      지식) 요약 문구 -- 2026-10-09, 완전히 새로운 내용일 때 검색 결과가
+      없으면 LLM이 자기 사전학습 지식으로만 답하는 게(의도된 동작, 시스템
+      프롬프트 참고) 사용자 입장에서는 "그냥 챗봇과 뭐가 다르냐"로 보일 수
+      있다는 지적 + 강사 피드백("어떤 소스 기반인지 보여주는 게 중요한 부분")
+      반영.
 
     TODO:
       - 단기 기억(세션 내 InMemory VectorStore) 검색 -- 아직 세션 개념 없음
@@ -190,7 +232,7 @@ def tier2_deep_agent(state: NoteMateState) -> dict:
         ],
         purpose="tier2_hint",
     )
-    return {"tier2_result": response.content}
+    return {"tier2_result": response.content, "tier2_sources": _summarize_tier2_sources(similar_docs)}
 
 
 def store_only(state: NoteMateState) -> dict:
@@ -254,6 +296,10 @@ def persist_note(state: NoteMateState) -> dict:
         # 문제가 있었음(사용자 지적). 프론트엔드가 세션 구분선을
         # 재구성하는 데 쓸 수 있게 같이 저장한다.
         "session_id": state.get("session_id"),
+        # 2026-10-09: 힌트가 뭘 근거로 만들어졌는지(내 필기/강의자료/일반
+        # 지식) 요약 -- tier2_deep_agent._summarize_tier2_sources() 참고.
+        # 힌트가 없는 줄(store_only)은 당연히 None.
+        "tier2_sources": state.get("tier2_sources"),
     }
     insert_note_chunk(row)
 

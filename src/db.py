@@ -7,6 +7,7 @@ supabase-py(REST API) 대신 psycopg로 직접 연결한다 (CLAUDE.md 2026-09-2
 
 import os
 import re
+from datetime import datetime
 
 from psycopg_pool import ConnectionPool
 
@@ -188,7 +189,7 @@ def get_today_hints(course_id: str | None) -> list[dict]:
     pool = get_pool()
     course_filter = "AND course_id = %(course_id)s" if course_id else ""
     query = f"""
-        SELECT content, tier2_result, created_at
+        SELECT content, tier2_result, tier2_sources, created_at
         FROM note_chunks
         WHERE source = 'personal'
           AND routing_decision = 'tier2'
@@ -240,21 +241,30 @@ def get_all_notes(course_id: str | None) -> list[dict]:
     session_id가 DB에만 남고(중복 힌트 방지용) 화면 재구성에는 전혀
     안 쓰여서, 새로고침하면 같은 날 여러 세션이 다시 하나로 뭉쳐 보이는
     문제가 있었음.
+
+    `deleted_sessions`에 올라간 session_id는 제외한다(2026-10-09) -- "세션
+    삭제" 버튼은 더 이상 note_chunks에서 실제로 지우지 않는다(사용자 결정:
+    "그것도 데이터인데 아예 복구 못 하고 기록도 못 보게 없애는 건 아닌 것
+    같다" -- 화면/타임라인에서는 사라지고 "N번째 필기세션 삭제됨" 로그만
+    남지만, 원본 행은 DB에 그대로 남아있음). 그래서 화면 재구성(이 함수)
+    쪽에서 걸러줘야 "삭제됐다"는 게 실제로 반영된다 -- 안 그러면 새로고침할
+    때 지운 세션이 다시 나타나 버림.
     """
     pool = get_pool()
     course_filter = "AND course_id = %(course_id)s" if course_id else ""
     query = f"""
         WITH all_notes AS (
-            SELECT content, tier2_result, created_at, client_line_id, origin_ref, session_id,
+            SELECT content, tier2_result, tier2_sources, created_at, client_line_id, origin_ref, session_id,
                    ROW_NUMBER() OVER (
                        PARTITION BY client_line_id ORDER BY created_at DESC
                    ) AS rn
             FROM note_chunks
             WHERE source = 'personal'
               AND origin_ref NOT LIKE 'ask:%%'
+              AND (session_id IS NULL OR session_id NOT IN (SELECT session_id FROM deleted_sessions))
               {course_filter}
         )
-        SELECT content, tier2_result, created_at, client_line_id, origin_ref, session_id
+        SELECT content, tier2_result, tier2_sources, created_at, client_line_id, origin_ref, session_id
         FROM all_notes
         WHERE client_line_id IS NULL OR rn = 1
         ORDER BY created_at ASC;
@@ -266,38 +276,43 @@ def get_all_notes(course_id: str | None) -> list[dict]:
             return [dict(zip(columns, row)) for row in cur.fetchall()]
 
 
-def delete_session_notes(session_id: str) -> int:
-    """세션 구분선 옆 삭제 버튼용(2026-10-08) -- 이 session_id에 속한 personal
-    필기를 note_chunks에서 통째로 지운다. 삭제된 행 수를 반환.
+def get_session_time_range(session_id: str) -> datetime | None:
+    """세션 삭제 버튼용(2026-10-09, 설계 변경) -- 이 session_id에 속한
+    personal 필기의 가장 이른 시각을 반환. 한 건도 없으면 None.
 
-    "새 필기 시작"으로 세션을 수동으로 나눌 수 있게 된 만큼, 테스트/실수로
-    쌓인 세션 하나를 통째로 되돌릴 방법도 필요하다는 요청 반영. source을
-    'personal'로 한정하는 건 방어적 조치 -- session_id는 personal 필기에만
-    붙으므로 사실상 항상 참이지만, 혹시 모를 혼선을 막기 위해 명시.
+    2026-10-08엔 이 자리에서 실제로 `DELETE FROM note_chunks`를 했었는데,
+    사용자 결정으로 물리 삭제를 그만뒀다 -- "그것도 데이터인데 아예 복구
+    못 하고 기록도 못 보게 없애는 건 아닌 것 같다. 그 경우의 수도 많지
+    않을 거고(보통 하루에 과목당 세션 하나)". note_chunks는 이제 손대지
+    않고, 화면/검색에서 숨기는 역할은 `deleted_sessions` 테이블 하나가
+    전부 담당한다(`get_all_notes()`의 제외 조건 참고). 이 함수는 그 묘비에
+    적을 "원래 시작 시각"만 조회한다.
     """
     pool = get_pool()
     with pool.connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "DELETE FROM note_chunks WHERE session_id = %(session_id)s AND source = 'personal';",
+                "SELECT MIN(created_at) FROM note_chunks "
+                "WHERE session_id = %(session_id)s AND source = 'personal';",
                 {"session_id": session_id},
             )
-            return cur.rowcount
+            return cur.fetchone()[0]
 
 
 def insert_deleted_session(
     session_id: str, course_id: str | None, day_key: str, ordinal: int, session_started_at: str
 ) -> None:
-    """세션 삭제 "묘비"(tombstone) 기록(2026-10-08) -- `delete_session_notes()`로
-    실제 필기 행을 지운 직후 호출. 지워진 세션의 note_chunks 행 자체가
-    사라지므로, "그날 몇 번째 세션이 삭제됐는지"를 알 길이 없어지는 문제가
-    있었음(사용자 지적: "동일 날짜에 세션이 서너 번 생겼는데 중간 걸 지우면
+    """세션 삭제 "묘비"(tombstone) 기록(2026-10-08, 2026-10-09에 호출부 변경
+    -- 이제 note_chunks를 지우지 않으므로 `get_session_time_range()` 조회
+    직후 호출). 원래 문제: 세션을 지우면(과거엔 실제 DELETE) 그 세션의
+    note_chunks 행 자체가 사라져서 "그날 몇 번째 세션이었는지"를 알 길이
+    없어짐(사용자 지적: "동일 날짜에 세션이 서너 번 생겼는데 중간 걸 지우면
     번호가 꼬일 수 있다 -- 생성 시점 번호는 고정하고, 삭제된 건 '몇 번째가
-    삭제됨'이라고 타임라인에 남기면 재넘버링이 필요 없다"). `ordinal`은
-    생성 시점에 매겨진 번호를 그대로 받아서 저장(재계산 안 함),
-    `session_started_at`은 그 세션의 실제 첫 필기 시각(또는 생성 시각) --
-    나중에 재구성할 때 이 시각 기준으로 다른 필기들과 시간순으로 정확히
-    끼워 넣기 위함(삭제 시각이 아니라 원래 있던 자리에 묘비가 나와야 함).
+    삭제됨'이라고 타임라인에 남기면 재넘버링이 필요 없다"). 지금은 행이
+    실제로 안 지워지지만, 화면에서 숨기는 기준 자체가 이 테이블이라 여전히
+    필요하다. `ordinal`은 생성 시점에 매겨진 번호를 그대로 받아서 저장
+    (재계산 안 함), `day_key`/`session_started_at`은 호출부(server.py)가
+    `get_session_time_range()` 결과를 KST로 변환해서 넘겨준다.
     """
     pool = get_pool()
     with pool.connection() as conn:
@@ -374,14 +389,14 @@ def insert_note_chunk(row: dict) -> None:
             top_score, is_question, is_abbreviated, is_new_concept,
             session_duplicate_score, routing_decision, tier2_result, embedding,
             client_line_id, hint_category, top_match_feedback_value,
-            top_match_feedback_days_ago, session_id
+            top_match_feedback_days_ago, session_id, tier2_sources
         ) VALUES (
             %(content)s, %(source)s, %(medium)s, %(course_id)s,
             %(note_timestamp)s, %(origin_ref)s,
             %(top_score)s, %(is_question)s, %(is_abbreviated)s, %(is_new_concept)s,
             %(session_duplicate_score)s, %(routing_decision)s, %(tier2_result)s, %(embedding)s::vector,
             %(client_line_id)s, %(hint_category)s, %(top_match_feedback_value)s,
-            %(top_match_feedback_days_ago)s, %(session_id)s
+            %(top_match_feedback_days_ago)s, %(session_id)s, %(tier2_sources)s
         )
         ON CONFLICT (origin_ref) DO NOTHING;
     """
