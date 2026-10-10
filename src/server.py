@@ -34,6 +34,7 @@ from src.db import (
     get_today_hints,
     insert_deleted_session,
     record_hint_feedback,
+    record_line_deletion,
 )
 from src.session_memory import end_session
 from src.summarize import generate_day_summary
@@ -45,6 +46,13 @@ _MOCKUP_PATH = _PROJECT_ROOT / "notemate_mockup.html"
 # 사이클 테스트 후 DB 테이블로 옮기고 라우터에 연결해서 평가한다.
 _HINT_FEEDBACK_LOG = _PROJECT_ROOT / "data" / "hint_feedback_log.jsonl"
 _FEEDBACK_VALUES = {"+", "−", "-", "✓"}
+# dry_run(test:: 태그) 입력의 생성 결과 기록 (2026-10-10 결정) -- note_chunks/
+# 세션 작업기억/힌트 노출 통계 중 어디에도 안 남기는 게 "RAG 오염 방지"의
+# 원래 의도였는데, 그러다 보니 테스트 결과를 나중에 다시 확인할 방법이 전혀
+# 없어져버림(사용자 지적). note_chunks와 완전히 분리된 이 파일에만 남겨서 --
+# 검색/임베딩/통계 어디에도 안 쓰이니(RAG 소스 아님) 오염 없이, 그래도
+# 생성된 힌트 내용은 나중에 검토할 수 있게 한다.
+_TEST_RUN_LOG = _PROJECT_ROOT / "data" / "test_run_log.jsonl"
 
 app = FastAPI(title="NoteMate API")
 
@@ -82,6 +90,12 @@ def _append_hint_event(record: dict) -> None:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+def _append_test_event(record: dict) -> None:
+    _TEST_RUN_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(_TEST_RUN_LOG, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
 # 개발 중 이 정적 파일들을 수시로 고쳐서 바로 다시 서빙하므로, 브라우저가
 # Cache-Control 없이 알아서 판단(heuristic caching)하게 두지 않고 "매번
 # 서버에 확인해라"라고 명시한다 -- 그래야 일반 새로고침(F5)만으로도 항상
@@ -114,11 +128,17 @@ def serve_run3_review() -> FileResponse:
 
 @app.post("/api/ingest_note")
 def api_ingest_note(
-    content: str = Form(...),
+    # Form(...)(필수)로 두면 빈 문자열("")이 넘어올 때 FastAPI가 이를
+    # None으로 취급해 "필드 없음" 422를 내는 버그가 있었다(2026-10-10 실측,
+    # curl/urllib 둘 다로 재현 확인) -- 줄 삭제(빈 내용 제출)를 지원하려면
+    # 빈 문자열이 정상적으로 통과해야 해서 명시적 기본값(Form(""))으로 바꿈.
+    content: str = Form(""),
     course_id: str = Form(_DEFAULT_COURSE_ID),
     session_id: str = Form(...),
     origin_prefix: str = Form("live"),
     client_line_id: str | None = Form(None),
+    dry_run: bool = Form(False),
+    inserted_out_of_place: bool = Form(False),
 ) -> dict:
     """필기 한 조각(문단/줄 단위)을 받아 파이프라인에 투입.
 
@@ -137,7 +157,39 @@ def api_ingest_note(
     줄의 최신 버전만 복원한다(안 넘기면 매번 새 줄로 취급돼서, 줄을 고쳐
     쓸수록 새로고침할 때 과거 버전까지 전부 중복으로 쌓여 보이던 버그가
     있었다 -- 2026-10-02 실측).
+
+    `dry_run`: True면 검색/판단/힌트 생성은 기존 데이터 기준으로 실제로
+    돌아가지만 저장은 안 한다(2026-10-10) -- notemate_mockup.html의
+    `test::` 테스트 입력이 쓴다. note_chunks/세션 작업기억/힌트 노출 통계
+    어디에도 안 남기는 건 그대로지만(RAG 오염 방지 취지 유지), 결과 자체를
+    나중에 확인할 수 있게 `_TEST_RUN_LOG`에만 따로 남긴다(사용자 지적: 테스트
+    결과를 재확인할 방법이 전혀 없었음).
+
+    `inserted_out_of_place`: 사용자가 타임라인 중 과거 세션/날짜 블록으로
+    스크롤해서 그 자리에 입력한 경우 True(2026-10-10). 판단/라우팅엔 안
+    쓰이고 그대로 저장만 됨 -- 화면에서 다른 글자색으로 표시하는 용도
+    ([[deferred-historical-note-insertion]], 제대로 된 "실제 그 자리에
+    소속"은 차후과제).
+
+    content가 빈 문자열(필기 줄을 지우고 제출한 경우): 전체 파이프라인을
+    타지 않고 `record_line_deletion()`으로 바로 간다(2026-10-10, 사용자
+    요청 -- "수정이 되는데 삭제가 안 되는 건 이상하다"). `client_line_id`가
+    없으면(한 번도 저장 안 된, 방금 만들었다 바로 지운 줄) 지울 것 자체가
+    없으니 완전히 조용히 끝낸다.
     """
+    if not content.strip():
+        if client_line_id:
+            origin_ref = f"{origin_prefix}:{session_id}:{datetime.now().isoformat()}:deleted"
+            record_line_deletion(client_line_id, course_id, session_id, origin_ref)
+        return {
+            "routing_decision": None,
+            "top_score": None,
+            "is_question": None,
+            "tier2_result": None,
+            "tier2_sources": None,
+            "origin_ref": None,
+        }
+
     origin_ref = f"{origin_prefix}:{session_id}:{datetime.now().isoformat()}"
     state = ingest_note(
         content=content,
@@ -148,8 +200,23 @@ def api_ingest_note(
         timestamp=datetime.now(),
         session_id=session_id,
         client_line_id=client_line_id,
+        dry_run=dry_run,
+        inserted_out_of_place=inserted_out_of_place,
     )
-    if state.get("tier2_result"):
+    if dry_run:
+        # note_chunks/세션 작업기억/힌트 노출 통계와 완전히 분리된 파일 --
+        # RAG 검색이나 실사용 지표 어디에도 안 쓰이니, 내용만 나중에 검토 가능.
+        _append_test_event({
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "course_id": course_id,
+            "session_id": session_id,
+            "content": content,
+            "routing_decision": state.get("routing_decision"),
+            "top_score": state.get("top_score"),
+            "tier2_result": state.get("tier2_result"),
+            "tier2_sources": state.get("tier2_sources"),
+        })
+    elif state.get("tier2_result"):
         # 노출(shown) 기록: 힌트가 실제로 만들어져 화면에 전달된 순간. 분모 용도.
         _append_hint_event({
             "ts": datetime.now().isoformat(timespec="seconds"),
@@ -287,6 +354,7 @@ def api_all_notes(course_id: str = _DEFAULT_COURSE_ID) -> list[dict]:
             "client_line_id": n["client_line_id"],
             "origin_ref": n["origin_ref"],
             "session_id": n["session_id"],
+            "inserted_out_of_place": n["inserted_out_of_place"],
         }
         for n in notes
     ]
@@ -340,6 +408,13 @@ def api_delete_session(
 
     day_key = started_at.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y%m%d")
     insert_deleted_session(session_id, course_id, day_key, ordinal, started_at.isoformat())
+    # 세션 내 작업기억(인메모리, src/session_memory.py)도 같이 비운다
+    # (2026-10-10, 외부 리뷰 지적) -- 안 비우면, 지운 세션의 session_id로
+    # (드물지만, 예: 지운 세션이 지금 떠 있는 라이브 세션이었던 경우) 계속
+    # 필기를 이어 쓸 때 "세션 내 중복 억제" 판단이 이미 지워진 내용까지
+    # 근거로 계속 쓰게 된다. end_session()은 없는 session_id를 넘겨도
+    # 조용히 무시하므로, 이미 세션이 끝나있던 경우에도 안전하게 호출 가능.
+    end_session(session_id)
     return {"ok": True, "tombstoned": True}
 
 

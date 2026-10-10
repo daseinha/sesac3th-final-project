@@ -30,6 +30,17 @@ class NoteMateState(TypedDict):
     # get_all_notes()가 "전체 복원 화면"에서 한 줄의 여러 수정본을 중복 표시하지 않고
     # 최신 것만 고르게 해주는 키(2026-10-02, 새로고침 시 수정 내역이 전부 중복으로
     # 쌓여 보이던 버그 수정).
+    dry_run: bool  # 2026-10-10: test:: 태그 입력을 "백엔드 호출 자체 스킵"에서
+    # "기존 DB 근거로 실제 검색/힌트 생성은 돌리되 저장만 스킵"으로 바꾸기 위해
+    # 추가. True면 persist_note가 DB insert와 세션 작업기억 등록을 건너뛴다 --
+    # 그 앞 노드들(assess_note, tier2_deep_agent 등)은 전부 읽기만 하므로 안 건드림.
+    inserted_out_of_place: bool | None  # 2026-10-10: 사용자가 타임라인 중 과거
+    # 세션/날짜 블록으로 스크롤해서 그 자리에 새로 입력한 경우 True. client_line_id와
+    # 같은 성격의 순수 통과 필드 -- 판단/라우팅엔 전혀 안 쓰이고 persist_note가
+    # 그대로 저장만 함. 새로고침하면 이 줄은 (아직 미구현인 "소속 재배치"
+    # 기능 전까지는) 여전히 오늘/활성 세션 자리로 재배치되지만, 이 플래그로
+    # "원래 다른 위치에서 입력됐다"는 걸 화면에 다른 글자색으로만 표시해준다
+    # ([[deferred-historical-note-insertion]] 참고 -- 제대로 된 기능은 차후과제).
 
     # --- 처리 중간 산출물 ---
     embedding: list[float] | None

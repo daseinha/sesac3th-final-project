@@ -26,6 +26,25 @@ def get_pool() -> ConnectionPool:
     return _pool
 
 
+# 삭제된 세션(묘비, deleted_sessions)의 내용을 note_chunks를 읽는 모든 경로에서
+# 제외하기 위한 공통 SQL 조각(2026-10-10, 외부 리뷰 Q1 반영) -- 처음엔
+# get_all_notes()(화면 재구성)에만 넣었었는데, 검색/판단 쪽(이 아래 네 함수)엔
+# 전혀 안 걸러지고 있던 걸 리뷰에서 지적받아 실제로 확인함. 그래서 소프트
+# 삭제했는데도 그 내용이 라우팅 확신도(top_score)·Tier2 근거·"오늘의 요약"에
+# 계속 영향을 줄 수 있었음. `NOT IN` 대신 `NOT EXISTS`를 쓴다 -- `NOT IN`은
+# 서브쿼리 결과에 NULL이 하나라도 섞이면 전체가 사라지는 함정이 있는데(지금은
+# `deleted_sessions.session_id`가 PK라 NULL이 될 수 없어 실제로는 안전하지만),
+# `NOT EXISTS`는 그 함정 자체가 구조적으로 없어서 더 안전한 기본값으로 택함.
+# `note_chunks.session_id`가 NULL인 행(이 컬럼이 생기기 전 과거 데이터)은
+# 비교가 "불명(unknown)"이 되어 자동으로 매치 안 되니 따로 `IS NULL OR`를
+# 붙일 필요도 없음.
+_ACTIVE_SESSION_FILTER = """
+    AND NOT EXISTS (
+        SELECT 1 FROM deleted_sessions d WHERE d.session_id = note_chunks.session_id
+    )
+"""
+
+
 def search_top_similarity(embedding: list[float], course_id: str | None) -> dict | None:
     """note_chunks에서 embedding과 가장 유사한 기존 행의 코사인 유사도(0~1에 가까움)와
     그 행의 피드백 상태(feedback_value/feedback_at)를 함께 반환.
@@ -49,6 +68,7 @@ def search_top_similarity(embedding: list[float], course_id: str | None) -> dict
         FROM note_chunks
         WHERE embedding IS NOT NULL
         {course_filter}
+        {_ACTIVE_SESSION_FILTER}
         ORDER BY embedding <=> %(embedding)s::vector
         LIMIT 1;
     """
@@ -96,6 +116,7 @@ def search_similar_chunks(
         FROM note_chunks
         WHERE embedding IS NOT NULL
         {course_filter}
+        {_ACTIVE_SESSION_FILTER}
         ORDER BY embedding <=> %(embedding)s::vector
         LIMIT %(k)s;
     """
@@ -110,14 +131,32 @@ def fetch_corpus_for_bm25(course_id: str | None) -> list[dict]:
     """BM25 인덱스를 만들기 위해 course_id 범위의 note_chunks content를 전부 가져온다.
 
     LangChain의 BM25Retriever가 인메모리 방식이라, 매 검색 시점에 이 함수로
-    코퍼스를 불러와서 즉석으로 인덱스를 만든다(src/retrieval.py).
+    코퍼스를 불러와서 즉석으로 인덱스를 만든다(src/retrieval.py) -- 캐시가
+    아예 없으니 삭제된 세션을 걸러내는 것도 이 쿼리 한 곳만 고치면 다음 호출
+    부터 바로 반영됨(2026-10-10, 외부 리뷰가 "BM25 캐시 무효화"를 걱정했는데
+    실제로는 캐시 자체가 없어서 해당 없음).
+
+    이 함수의 `course_filter`는 다른 조회 함수들과 달리 원래 `WHERE ...`
+    형태였다(이 쿼리엔 기본 WHERE가 없어서) -- `_ACTIVE_SESSION_FILTER`가
+    `AND ...`로 시작하는 공통 조각이라 그대로 이어붙이면 `course_id`가 없을
+    때 `WHERE AND NOT EXISTS(...)` 같은 구문 오류가 난다(외부 리뷰 지적,
+    실제로 맞는 함정이었음). 그래서 이 함수만 기본 `WHERE`를
+    `_ACTIVE_SESSION_FILTER`가 쓰도록 바꾸고, `course_id`는 `AND`로 뒤에 붙인다.
+
+    `content != ''` 조건(2026-10-10 추가)은 원래 `WHERE true`였던 자리 --
+    `record_line_deletion()`이 "삭제됨" 표시로 남기는 빈 내용 행을 BM25
+    코퍼스에서 제외한다(벡터 쪽은 그 행의 embedding이 NULL이라 이미
+    `search_similar_chunks`에서 자동으로 빠짐, BM25는 embedding을 안 봐서
+    따로 걸러줘야 함).
     """
     pool = get_pool()
-    course_filter = "WHERE course_id = %(course_id)s" if course_id else ""
+    course_and = "AND course_id = %(course_id)s" if course_id else ""
     query = f"""
         SELECT content, source, origin_ref
         FROM note_chunks
-        {course_filter}
+        WHERE content != ''
+        {_ACTIVE_SESSION_FILTER}
+        {course_and}
         ORDER BY id;
     """
     with pool.connection() as conn:
@@ -185,6 +224,11 @@ def get_today_hints(course_id: str | None) -> list[dict]:
     오래된순(ASC)으로 반환 -- 왼쪽 필기창과 같은 시간축(위→아래로 갈수록
     최신)을 맞추기 위함(2026-10-02 실측 버그: DESC로 뒀다가 최신 힌트가
     위에 쌓여 필기 흐름과 반대 방향이 되는 문제 발견, CLAUDE.md 참고).
+
+    `created_at`을 KST로 변환해서 "오늘"을 판단한다(2026-10-10, 외부 리뷰
+    지적 -- `SHOW timezone`으로 직접 확인해보니 DB 세션 타임존이 UTC라,
+    `created_at::date = CURRENT_DATE`를 그대로 쓰면 자정~오전9시(KST) 사이에
+    쓴 필기가 "오늘"이 아니라 "어제"로 빠지는 실제 버그였음).
     """
     pool = get_pool()
     course_filter = "AND course_id = %(course_id)s" if course_id else ""
@@ -194,8 +238,9 @@ def get_today_hints(course_id: str | None) -> list[dict]:
         WHERE source = 'personal'
           AND routing_decision = 'tier2'
           AND tier2_result IS NOT NULL
-          AND created_at::date = CURRENT_DATE
+          AND (created_at AT TIME ZONE 'Asia/Seoul')::date = (now() AT TIME ZONE 'Asia/Seoul')::date
           {course_filter}
+          {_ACTIVE_SESSION_FILTER}
         ORDER BY created_at ASC;
     """
     with pool.connection() as conn:
@@ -249,24 +294,33 @@ def get_all_notes(course_id: str | None) -> list[dict]:
     남지만, 원본 행은 DB에 그대로 남아있음). 그래서 화면 재구성(이 함수)
     쪽에서 걸러줘야 "삭제됐다"는 게 실제로 반영된다 -- 안 그러면 새로고침할
     때 지운 세션이 다시 나타나 버림.
+
+    `content != ''`(2026-10-10 추가): 같은 `client_line_id`의 최신 버전이
+    빈 내용이면 그 줄 전체를 화면에서 뺀다 -- `record_line_deletion()`이
+    과거 줄을 지우고 Enter 누르면 남기는 "삭제됨" 표시. RAG 검색 쪽
+    (search_similar_chunks 등)은 이 필터와 무관하게 이전 버전(실제 내용)을
+    계속 검색 대상으로 쓴다 -- 화면 삭제가 RAG 코퍼스에는 전파되지 않는
+    의도된 설계(사용자 방침: "RAG는 지식 로그라 쌓여있는 게 좋다").
     """
     pool = get_pool()
     course_filter = "AND course_id = %(course_id)s" if course_id else ""
     query = f"""
         WITH all_notes AS (
             SELECT content, tier2_result, tier2_sources, created_at, client_line_id, origin_ref, session_id,
+                   inserted_out_of_place,
                    ROW_NUMBER() OVER (
                        PARTITION BY client_line_id ORDER BY created_at DESC
                    ) AS rn
             FROM note_chunks
             WHERE source = 'personal'
               AND origin_ref NOT LIKE 'ask:%%'
-              AND (session_id IS NULL OR session_id NOT IN (SELECT session_id FROM deleted_sessions))
               {course_filter}
+              {_ACTIVE_SESSION_FILTER}
         )
-        SELECT content, tier2_result, tier2_sources, created_at, client_line_id, origin_ref, session_id
+        SELECT content, tier2_result, tier2_sources, created_at, client_line_id, origin_ref, session_id,
+               inserted_out_of_place
         FROM all_notes
-        WHERE client_line_id IS NULL OR rn = 1
+        WHERE (client_line_id IS NULL OR rn = 1) AND content != ''
         ORDER BY created_at ASC;
     """
     with pool.connection() as conn:
@@ -389,14 +443,14 @@ def insert_note_chunk(row: dict) -> None:
             top_score, is_question, is_abbreviated, is_new_concept,
             session_duplicate_score, routing_decision, tier2_result, embedding,
             client_line_id, hint_category, top_match_feedback_value,
-            top_match_feedback_days_ago, session_id, tier2_sources
+            top_match_feedback_days_ago, session_id, tier2_sources, inserted_out_of_place
         ) VALUES (
             %(content)s, %(source)s, %(medium)s, %(course_id)s,
             %(note_timestamp)s, %(origin_ref)s,
             %(top_score)s, %(is_question)s, %(is_abbreviated)s, %(is_new_concept)s,
             %(session_duplicate_score)s, %(routing_decision)s, %(tier2_result)s, %(embedding)s::vector,
             %(client_line_id)s, %(hint_category)s, %(top_match_feedback_value)s,
-            %(top_match_feedback_days_ago)s, %(session_id)s, %(tier2_sources)s
+            %(top_match_feedback_days_ago)s, %(session_id)s, %(tier2_sources)s, %(inserted_out_of_place)s
         )
         ON CONFLICT (origin_ref) DO NOTHING;
     """
@@ -405,6 +459,51 @@ def insert_note_chunk(row: dict) -> None:
             cur.execute(query, row)
             if cur.rowcount == 0:
                 print(f"[insert_note_chunk] 중복 origin_ref라 건너뜀: {row.get('origin_ref')!r}")
+
+
+def record_line_deletion(
+    client_line_id: str, course_id: str | None, session_id: str | None, origin_ref: str
+) -> None:
+    """필기 줄 하나를 "삭제됨"으로 기록 -- 빈 내용으로 새 버전을 추가한다.
+
+    2026-10-10, 사용자 요청: "수정이 가능한데 삭제가 안 되는 건 이상하다 --
+    최소한 과거 줄 지우고 엔터를 누르면 그것도 수정과 마찬가지로 반영돼야
+    한다." 지금까지 `submitNote()`는 빈 내용이면 그냥 조용히 무시했어서
+    (empty text는 서버에 전혀 전달 안 됨), 화면에서 지워도 새로고침하면
+    원래 내용이 그대로 복원되는 문제가 있었음.
+
+    `insert_note_chunk()`(전체 LangGraph 파이프라인 거친 뒤 호출됨)를 안
+    쓰고 이 함수로 바로 가는 이유: 빈 내용을 임베딩하거나 LLM 판단(질문/축약
+    여부)에 태우는 건 무의미하고 비용 낭비. `embedding`은 일부러 NULL로
+    남긴다 -- `search_top_similarity`/`search_similar_chunks`가 이미
+    `WHERE embedding IS NOT NULL`로 걸러서 자동으로 검색 대상에서 빠지고,
+    `fetch_corpus_for_bm25`는 `content != ''` 필터로 따로 뺀다.
+
+    이전 버전(실제 내용이 있던 행)은 전혀 안 건드린다 -- 사용자 방침:
+    "RAG에 되먹임되는 데이터는 지식 로그라서, 추가/수정/삭제 전부 쌓여있는
+    게 개인화에 좋다. 화면(일반 조회)에서는 삭제/수정이 반영되지만, RAG
+    검색 자료는 그대로 둔다"는 의도적 설계 -- `get_all_notes()`가 같은
+    `client_line_id`의 최신 버전(이 빈 행)을 골라서 화면에서 빼주는 역할만
+    하고, RAG 검색 쿼리들은 이 함수가 추가하는 행과 무관하게 이전 버전들을
+    계속 검색 대상으로 쓴다(append-only 원칙 유지).
+    """
+    pool = get_pool()
+    query = """
+        INSERT INTO note_chunks (content, source, medium, course_id, note_timestamp, origin_ref, client_line_id, session_id)
+        VALUES ('', 'personal', 'txt', %(course_id)s, now(), %(origin_ref)s, %(client_line_id)s, %(session_id)s)
+        ON CONFLICT (origin_ref) DO NOTHING;
+    """
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                query,
+                {
+                    "course_id": course_id,
+                    "origin_ref": origin_ref,
+                    "client_line_id": client_line_id,
+                    "session_id": session_id,
+                },
+            )
 
 
 def log_failed_ingestion(origin_ref: str, error_type: str, error_message: str) -> None:

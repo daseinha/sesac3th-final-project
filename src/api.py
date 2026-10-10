@@ -28,6 +28,8 @@ def ingest_note(
     timestamp: datetime | None = None,
     session_id: str | None = None,
     client_line_id: str | None = None,
+    dry_run: bool = False,
+    inserted_out_of_place: bool = False,
 ) -> NoteMateState:
     """필기 한 조각을 파이프라인에 투입하고, 처리 완료된 최종 State를 반환한다.
 
@@ -45,6 +47,13 @@ def ingest_note(
             여러 번 제출해도 같은 값을 넘기면, get_all_notes()가 복원할 때
             최신 버전 하나만 보여준다(안 넘기면 매번 별개의 줄로 취급됨 --
             재생 스크립트/업로드처럼 한 번만 제출되는 호출은 그냥 생략하면 됨).
+        dry_run: True면 검색/판단/힌트 생성은 기존 데이터를 근거로 실제로
+            돌아가지만, 그 결과를 DB에 저장하지도 세션 작업기억에 등록하지도
+            않는다(2026-10-10, 테스트 입력이 RAG 코퍼스를 오염시키지 않으면서도
+            힌트 생성 품질을 확인할 수 있게).
+        inserted_out_of_place: 사용자가 타임라인 중 과거 세션/날짜 블록으로
+            스크롤해서 그 자리에 입력한 경우 True. 판단/라우팅엔 안 쓰이고
+            그대로 저장만 됨 -- 화면 표시용([[deferred-historical-note-insertion]]).
 
     Returns:
         그래프 실행이 끝난 최종 State. routing_decision으로 Tier1/2 여부를,
@@ -59,6 +68,8 @@ def ingest_note(
         "origin_ref": origin_ref,
         "session_id": session_id,
         "client_line_id": client_line_id,
+        "dry_run": dry_run,
+        "inserted_out_of_place": inserted_out_of_place,
     }
     return graph.invoke(initial_state)
 

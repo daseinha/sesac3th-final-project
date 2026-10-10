@@ -11,9 +11,37 @@ from pydantic import BaseModel, Field
 from src.db import insert_note_chunk, search_top_similarity
 from src.llm import embed_text, invoke_chat, invoke_structured
 from src.retrieval import build_hybrid_retriever
-from src.routers import LOW_THRESHOLD, compute_routing_decision
+from src.routers import compute_routing_decision
 from src.session_memory import add_to_session, check_session_duplicate
 from src.state import NoteAssessment, NoteMateState
+
+# 힌트 근거 표시(_summarize_tier2_sources)가 "이 매치는 노이즈가 아니라 진짜
+# 관련 있다"고 인정하는 유사도 최소값(2026-10-10, 두 번째 수정).
+#
+# 경위: 처음엔 이 기준이 아예 없어서(벡터 매치면 크기 안 보고 다 인정) 완전히
+# 무관한 질문("막걸리 발효 효모", "그리스의 수도" 등)에도 "내 필기 N건
+# 참고"가 떴음(사용자가 직접 재현 제보) -- 벡터 검색이 항상 top-k를 반환하는
+# 특성 때문에 유사도가 아무리 낮아도 뭔가는 걸림. 그래서 다시 크기 기준이
+# 필요해졌는데, 바로 전에 썼던 라우팅용 LOW_THRESHOLD(0.75)를 재사용하면
+# 안 된다는 것도 바로 전 수정에서 실측으로 확인됨(Tier2의 가장 흔한 트리거
+# 자체가 "top_score<0.75"라서, 그 값을 그대로 쓰면 가장 흔한 경로에서 항상
+# "근거 없음"이 됨).
+#
+# 그래서 완전히 새로운, 더 낮은 값을 실제 유사도 분포로 다시 잡았다 -- 1차
+# 로는 0.35를 썼는데, 검증 중 무관한 질문("콜로세움 수용 인원", "라면 면발
+# 탄력")의 최고 유사도가 0.33~0.35까지 올라오는 경우를 발견해서(노이즈
+# 바닥이 생각보다 높음 -- 아래 참고) 다시 0.40으로 올림. 지금까지 모은
+# 샘플(무관한 질문 7개 최고유사도 0.26~0.3501, 실제 관련 있는 질문 5개
+# 최고유사도 0.4055~0.6327) 전부가 0.3501과 0.4055 사이에서 깨끗하게
+# 갈려서 0.40을 그 틈 사이로 선택. [잠정] 그래도 표본이 10여 건뿐인 가벼운
+# 실측 근거 -- 나중에 실사용 데이터가 쌓이면 재검증 필요(LOW_THRESHOLD/
+# HIGH_THRESHOLD와 같은 성격의 미확정 값). 참고로 검증 중 눈치챈 것: 사용자가
+# 이 기능을 테스트하면서 무관한 질문들을 `test::` 태그 없이 필기창에 그대로
+# 입력해서, 그 질문들 자체가 지금 note_chunks에 진짜 personal 필기로 쌓이고
+# 있음 -- 서로 비슷한 "일부러 무관하게 고른" 질문끼리 유사도가 올라가는
+# 자기강화 노이즈가 생길 수 있어, 이후 이런 탐색적 테스트는 `test::`를 쓰는
+# 게 나음(CLAUDE.md 변경 이력에 기록).
+SOURCE_RELEVANCE_FLOOR = 0.40
 
 
 class _NoteAssessmentSchema(BaseModel):
@@ -171,20 +199,42 @@ def _summarize_tier2_sources(similar_docs: list) -> str:
     있으면 top-k를 무조건 반환"하는 특성 때문에, 완전히 무관한 내용(예: 부트
     캠프와 무관한 "양자컴퓨터 표면코드" 질문)에도 "내 필기 9건"처럼 뜨는 문제를
     실제로 확인함(BM25 쪽 키워드 우연 일치가 대부분). 벡터 쪽엔 유사도 점수가
-    있으니(`metadata['similarity']`), 라우팅에서 이미 쓰는 `LOW_THRESHOLD`
-    (새 임의의 숫자를 만들지 않고 기존 검증된 값 재사용)보다 낮은 매치는
-    "근거"로 안 센다. BM25 전용 매치(벡터 점수가 없는 것, `similarity is None`)
-    는 신뢰할 점수가 없어서 같이 제외 -- 이번 실측에서 바로 이런 매치들이
-    키워드만 우연히 겹친 가짜 근거였음.
+    있으니(`metadata['similarity']`), BM25 전용 매치(벡터 점수가 없는 것,
+    `similarity is None`)는 신뢰할 점수가 없어서 "근거"로 안 센다 -- 이번
+    실측에서 바로 이런 매치들이 키워드만 우연히 겹친 가짜 근거였음.
+
+    2026-10-10 1차 수정(철회): 여기에 더해 라우팅용 LOW_THRESHOLD(0.75)를
+    "관련성" 기준으로도 재사용해서 유사도가 낮은 매치까지 걸러내려 했었는데,
+    실사용 테스트에서 거의 항상 "일반 지식 위주"만 뜨는 버그로 드러남(사용자
+    제보: 필기 내용을 그대로 다시 입력해도 똑같이 나옴). 원인은 구조적임 --
+    Tier2가 가장 흔하게 걸리는 트리거 자체가 "top_score < 0.75"(신규 개념
+    판정)라서, 그 트리거로 들어온 경우 코퍼스 전체에서의 최고 유사도 자체가
+    이미 0.75 미만으로 확정돼 있음. 즉 같은 0.75를 "근거 인정 기준"으로도
+    쓰면 바로 그 가장 흔한 경로에서 검색된 모든 문서가 자동으로 걸러져서,
+    실제로는 참고한 문서가 있어도 항상 "없음"으로 표시됨 -- 사실상 상시
+    오작동.
+
+    2026-10-10 2차 수정: 그래서 유사도 크기 기준을 완전히 뺐더니, 반대 방향
+    버그가 바로 드러남(사용자가 "막걸리 발효 효모", "그리스의 수도" 같은
+    완전히 무관한 질문으로 재현 제보) -- 벡터 검색은 유사도가 아무리 낮아도
+    항상 top-k를 반환하므로, 크기를 안 보면 무관한 질문도 전부 "내 필기 N건
+    참고"로 뜸(위 2026-10-09 항목과 본질적으로 같은 문제가 벡터 쪽에서도
+    재발한 것). 결론: 크기 기준 자체는 필요하지만 0.75는 라우팅 트리거와
+    충돌해서 못 쓴다는 것 -- `SOURCE_RELEVANCE_FLOOR`(0.35, 위 선언 참고)로
+    새로 분리해서 적용.
     """
-    relevant_docs = [d for d in similar_docs if (d.metadata.get("similarity") or 0) >= LOW_THRESHOLD]
+    relevant_docs = [
+        d
+        for d in similar_docs
+        if (d.metadata.get("similarity") or 0) >= SOURCE_RELEVANCE_FLOOR
+    ]
     if not relevant_docs:
         return "일반 지식(LLM 사전학습) 기반"
     counts: dict[str, int] = {}
     for d in relevant_docs:
         source = d.metadata.get("source") or "personal"
         counts[source] = counts.get(source, 0) + 1
-    return " · ".join(f"{_SOURCE_LABELS.get(s, s)} {n}건" for s, n in counts.items())
+    return " · ".join(f"{_SOURCE_LABELS.get(s, s)} {n}건" for s, n in counts.items()) + " 참고"
 
 
 def tier2_deep_agent(state: NoteMateState) -> dict:
@@ -269,7 +319,16 @@ def persist_note(state: NoteMateState) -> dict:
     가이드 원문은 "세션 종료/유휴 시점 배치 upsert"라고 돼 있지만, 지금 단계는
     재생 스크립트로 한 건씩 순차 테스트하는 거라 즉시 저장으로 단순화했다.
     [잠정] 나중에 실제 세션 개념이 생기면 배치 방식으로 바꿀 수 있음.
+
+    dry_run이면 여기서 끝 -- DB insert도, 세션 작업기억 등록도 안 한다. 그
+    앞 노드들(assess_note/tier2_deep_agent 등)은 전부 읽기만 하므로, 검색/
+    힌트 생성은 기존 데이터 기준으로 실제로 돌아간 상태 그대로 state에 남아
+    호출자에게 반환된다(2026-10-10, test:: 테스트 입력이 RAG를 오염시키지
+    않으면서 힌트 품질을 확인할 수 있게).
     """
+    if state.get("dry_run"):
+        return {}
+
     assessment = state.get("assessment") or {}
     row = {
         "content": state["content"],
@@ -300,6 +359,9 @@ def persist_note(state: NoteMateState) -> dict:
         # 지식) 요약 -- tier2_deep_agent._summarize_tier2_sources() 참고.
         # 힌트가 없는 줄(store_only)은 당연히 None.
         "tier2_sources": state.get("tier2_sources"),
+        # 2026-10-10: 과거 세션/날짜 블록에 끼워넣은 입력인지 표시용 플래그
+        # ([[deferred-historical-note-insertion]]). 판단/라우팅엔 안 쓰임.
+        "inserted_out_of_place": state.get("inserted_out_of_place"),
     }
     insert_note_chunk(row)
 
