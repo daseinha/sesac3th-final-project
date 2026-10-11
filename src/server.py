@@ -232,7 +232,14 @@ def api_ingest_note(
     return {
         "routing_decision": state.get("routing_decision"),
         "top_score": state.get("top_score"),
-        "is_question": state.get("is_question"),
+        # 2026-10-11 수정: assess_note가 판단 결과를 state["assessment"]["is_question"]
+        # (중첩)에 저장하는데, 여긴 state.get("is_question")(평평한 키)을 읽고
+        # 있어서 그런 키가 state에 존재한 적이 없어 항상 None을 반환하던 버그였음
+        # (백엔드 베타테스트 중 발견 -- 질문형 문장을 넣어도 응답이 항상
+        # is_question=null로 와서 역추적함). 라우팅 자체는 내부에서
+        # state["assessment"]를 그대로 쓰므로 영향 없었고, 이 API 응답 필드만
+        # 항상 비어있었음.
+        "is_question": (state.get("assessment") or {}).get("is_question"),
         "tier2_result": state.get("tier2_result"),
         # 2026-10-09: 이 힌트가 뭘 근거로 만들어졌는지(내 필기/강의자료/일반
         # 지식) -- 강사 피드백 + 사용자 질문 반영, src/nodes.py 참고.
