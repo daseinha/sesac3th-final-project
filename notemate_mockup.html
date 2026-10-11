@@ -489,6 +489,16 @@
             </span>
             <span style="font-size: 12px; color: var(--color-text-secondary);">개념 그래프</span>
           </label>
+          <!-- 실제로 동작하는 설정(2026-10-12, 사용자 요청) -- 위 4개는 전부
+               미구현 placeholder라 구분하려고 일반 체크박스를 그대로 쓴다.
+               끄면 Tier2가 근거(강의자료/내 필기)를 못 찾았을 때 힌트 생성
+               자체를 건너뛴다(src/nodes.py tier2_deep_agent,
+               allow_general_knowledge) -- 힌트 남발 완화용. 기본값 켜짐
+               (기존 동작 유지), submitNote()/ask 핸들러 둘 다에서 읽어서 같이 보냄. -->
+          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; padding-left: 12px; border-left: 1px solid var(--color-border-input);" title="꺼두면 강의자료/내 필기에 근거가 없을 때 힌트를 만들지 않습니다">
+            <input type="checkbox" id="general-knowledge-toggle" checked style="width: 14px; height: 14px; cursor: pointer; accent-color: var(--color-hint-icon); margin: 0;">
+            <span style="font-size: 12px; font-weight: 700; color: var(--color-hint-icon);">LLM 기본지식 사용</span>
+          </label>
         </div>
       </div>
     </div>
@@ -684,6 +694,7 @@
   const clearScreenBtn = document.getElementById('clear-screen-btn');
   const hardResetBtn = document.getElementById('hard-reset-btn');
   const hardResetIcon = document.getElementById('hard-reset-icon');
+  const generalKnowledgeToggle = document.getElementById('general-knowledge-toggle');
 
   // 애드온 서랍(2026-10-10) -- STT/퀴즈생성/자료추천/개념그래프 토글을
   // 평소엔 숨겨두고, 손잡이를 누르면 펼쳐지는 서랍처럼 보여준다(사용자
@@ -1385,6 +1396,9 @@
     });
     if (isTest) body.set('dry_run', 'true');
     if (outOfPlace) body.set('inserted_out_of_place', 'true');
+    // 2026-10-12: 애드온 서랍의 "LLM 기본지식 답변 포함" 토글 -- 꺼져 있으면
+    // 근거 없을 때 힌트 생성을 건너뛴다(src/nodes.py tier2_deep_agent 참고).
+    if (!generalKnowledgeToggle.checked) body.set('allow_general_knowledge', 'false');
     pendingSubmitCount++;
     try {
       // keepalive: true -- 이 fetch가 아직 끝나기 전에 사용자가 탭/창을
@@ -1681,10 +1695,20 @@
       // (get_all_notes()). 안 그러면 새로고침할 때 질문이 필기 한 줄처럼
       // 복원돼버림(2026-10-02 실측 버그).
       const body = new URLSearchParams({ content: question, course_id: COURSE_ID, session_id: SESSION_ID, origin_prefix: 'ask' });
+      if (!generalKnowledgeToggle.checked) body.set('allow_general_knowledge', 'false');
       const res = await fetch('/api/ingest_note', { method: 'POST', body });
       const result = await res.json();
       askAnswer.style.display = 'none';
-      addAskLine(result.tier2_result || '조용히 저장됐어요 (충분히 익숙한 내용이에요).', result.origin_ref, result.tier2_sources);
+      // tier2_result가 없는 경우는 거의 세션중복 등으로 store_only로 조용히
+      // 넘어간 경우뿐임(2026-10-12 수정 -- "바로 물어보기"는 질문이라 근거가
+      // 없어도 src/nodes.py tier2_deep_agent가 "못 찾았다"는 정직한 답변
+      // 문구를 항상 돌려주도록 바뀌어서, routing_decision==='tier2'인데
+      // tier2_result가 비어있는 경우는 이제 거의 없음 -- 그래도 혹시를 위해
+      // 안전판 문구는 남겨둠).
+      const fallbackText = result.routing_decision === 'tier2'
+        ? '참고할 자료가 부족해서 답변을 만들지 못했어요.'
+        : '조용히 저장됐어요 (충분히 익숙한 내용이에요).';
+      addAskLine(result.tier2_result || fallbackText, result.origin_ref, result.tier2_sources);
       setAgentStatus('답변 작성 완료', { autoReset: true });
     } catch (err) {
       askAnswer.textContent = '서버 연결 실패 — ' + err;

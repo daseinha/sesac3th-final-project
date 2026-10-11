@@ -4,8 +4,10 @@ assess_note는 실제 로직(임베딩 + 벡터 검색 + LLM 구조화 출력)�
 tier2_deep_agent, store_only는 아직 스텁 -- 각 함수의 TODO 참고.
 """
 
+import os
 from datetime import datetime, timezone
 
+import requests
 from pydantic import BaseModel, Field
 
 from src.db import insert_note_chunk, search_top_similarity
@@ -223,11 +225,7 @@ def _summarize_tier2_sources(similar_docs: list) -> str:
     충돌해서 못 쓴다는 것 -- `SOURCE_RELEVANCE_FLOOR`(0.35, 위 선언 참고)로
     새로 분리해서 적용.
     """
-    relevant_docs = [
-        d
-        for d in similar_docs
-        if (d.metadata.get("similarity") or 0) >= SOURCE_RELEVANCE_FLOOR
-    ]
+    relevant_docs = _filter_relevant_docs(similar_docs)
     if not relevant_docs:
         return "일반 지식(LLM 사전학습) 기반"
     counts: dict[str, int] = {}
@@ -235,6 +233,17 @@ def _summarize_tier2_sources(similar_docs: list) -> str:
         source = d.metadata.get("source") or "personal"
         counts[source] = counts.get(source, 0) + 1
     return " · ".join(f"{_SOURCE_LABELS.get(s, s)} {n}건" for s, n in counts.items()) + " 참고"
+
+
+def _filter_relevant_docs(similar_docs: list) -> list:
+    """SOURCE_RELEVANCE_FLOOR 이상인 문서만 "진짜 근거"로 인정.
+
+    `_summarize_tier2_sources`(출처 표시용)와 `tier2_deep_agent`(일반지식
+    옵션 끌 때 생성 여부 판단용) 둘 다 "근거가 있는가"를 똑같은 기준으로
+    판단해야 해서 분리(2026-10-12, allow_general_knowledge 옵션 추가하며
+    중복 로직 정리).
+    """
+    return [d for d in similar_docs if (d.metadata.get("similarity") or 0) >= SOURCE_RELEVANCE_FLOOR]
 
 
 def tier2_deep_agent(state: NoteMateState) -> dict:
@@ -251,6 +260,8 @@ def tier2_deep_agent(state: NoteMateState) -> dict:
       프롬프트 참고) 사용자 입장에서는 "그냥 챗봇과 뭐가 다르냐"로 보일 수
       있다는 지적 + 강사 피드백("어떤 소스 기반인지 보여주는 게 중요한 부분")
       반영.
+    - 웹검색(Tavily, 2026-10-12): "바로 물어보기" + 근거 없음일 때만 개입,
+      조용한 힌트 경로는 절대 안 씀. 아래 _web_search_tavily() 참고.
 
     TODO:
       - 단기 기억(세션 내 InMemory VectorStore) 검색 -- 아직 세션 개념 없음
@@ -261,10 +272,52 @@ def tier2_deep_agent(state: NoteMateState) -> dict:
     )
     similar_docs = retriever.invoke(state["content"]) if retriever else []
 
-    if similar_docs:
-        context = "\n".join(f"- ({d.metadata.get('source')}) {d.page_content}" for d in similar_docs)
-    else:
-        context = "(참고할 만한 이전 필기 없음)"
+    # allow_general_knowledge=False(2026-10-12 추가) + 근거 자료가 하나도 없으면
+    # LLM 호출 자체를 건너뛴다 -- "검색은 됐는데 생성 내용이 부정확"한 것과는
+    # 다른 문제(근거 자체가 아예 없는 경우)이지만, 둘 다 "힌트 남발" 완화에
+    # 기여하고 비교테스트에도 쓸 수 있어 추가(사용자 요청). 기본값 True면
+    # 기존 동작(일반 지식으로라도 답변) 그대로 유지.
+    #
+    # is_ask(바로 물어보기)는 여기서 제외한다 -- 사용자 정정(2026-10-12,
+    # 아래 웹검색 분기 설명 참고): 조용한 힌트는 완전히 침묵해도 되지만,
+    # 바로 물어보기는 사용자가 직접 물은 "질문"이라 무응답으로 넘기면 안 됨.
+    # 대신 바로 아래 웹검색 분기가 먼저 기회를 갖고, 거기서도 못 찾으면
+    # 그쪽이 "못 찾았다"는 정직한 답변을 책임진다.
+    if (
+        not state.get("allow_general_knowledge", True)
+        and not state.get("is_ask")
+        and not _filter_relevant_docs(similar_docs)
+    ):
+        return {
+            "tier2_result": None,
+            "tier2_sources": "근거 자료 없음 -- 일반지식 옵션 꺼짐으로 힌트 생성 건너뜀",
+        }
+
+    # 웹검색(Tavily, 2026-10-12) -- "바로 물어보기"(is_ask) + 내 필기/강의자료에
+    # 근거가 없을 때만 개입. 조용한 힌트 경로(is_ask=False)는 절대 안 씀
+    # ([[deferred-web-search-addon]] 스코프: 바로 물어보기 전용). 이미 근거가
+    # 충분하면(검색이 잘 됐으면) 웹검색은 호출 자체를 안 해서 속도 영향도 없음.
+    web_results = []
+    if state.get("is_ask") and not _filter_relevant_docs(similar_docs):
+        web_results = _web_search_tavily(state["content"])
+        if not web_results:
+            # 바로 물어보기 + 내 필기/강의자료 근거 없음 + 웹검색도 결과 없음(또는
+            # 실패/타임아웃) -- 사용자 정정(2026-10-12): "이 경우엔 답변이지" --
+            # 바로 물어보기는 사용자가 직접 물어본 "질문"이라 조용한 힌트처럼
+            # 완전히 무응답으로 넘기면 안 됨(라우팅 원칙 "질문엔 무조건 답한다"와
+            # 같은 결). 대신 LLM 혼자 추측하게 두지 않고(이 기능 전체의 목적),
+            # 솔직하게 "못 찾았다"고 답하는 정형 문구로 응답 -- LLM 호출 없이
+            # 결정론적으로 생성(추측 여지 자체를 차단). 조용한 힌트 경로
+            # (is_ask=False)는 이 분기를 안 타므로 기존 "일반 지식" 폴백 그대로 유지.
+            return {
+                "tier2_result": "강의자료·내 필기·웹검색 어디에서도 관련 정보를 찾지 못했어요. "
+                "질문을 조금 더 구체적으로 다시 적어주시면 다시 찾아볼게요.",
+                "tier2_sources": "근거 자료 없음 (웹검색도 결과 없음)",
+            }
+
+    context_lines = [f"- ({d.metadata.get('source')}) {d.page_content}" for d in similar_docs]
+    context_lines += [f"- (웹검색: {r.get('title')}) {r.get('content')}" for r in web_results]
+    context = "\n".join(context_lines) if context_lines else "(참고할 만한 이전 필기 없음)"
 
     assessment = state.get("assessment") or {}
     user_prompt = (
@@ -272,7 +325,7 @@ def tier2_deep_agent(state: NoteMateState) -> dict:
         f"판단: is_question={assessment.get('is_question')}, "
         f"is_abbreviated={assessment.get('is_abbreviated')}, "
         f"is_new_concept={assessment.get('is_new_concept')}\n\n"
-        f"참고할 이전 필기 (유사도 순):\n{context}"
+        f"참고할 이전 필기/웹검색 결과 (관련도 순):\n{context}"
     )
 
     response = invoke_chat(
@@ -282,7 +335,35 @@ def tier2_deep_agent(state: NoteMateState) -> dict:
         ],
         purpose="tier2_hint",
     )
-    return {"tier2_result": response.content, "tier2_sources": _summarize_tier2_sources(similar_docs)}
+    # 웹검색이 실제로 개입했을 때만 출처 표시에 반영 -- 위 호출 조건상 web_results가
+    # 채워지는 경우는 항상 _filter_relevant_docs(similar_docs)가 비어있을 때라서
+    # (= _summarize_tier2_sources가 "일반 지식" 라벨을 돌려줄 상황), 그 라벨을
+    # "웹검색 N건 참고"로 바꿔치기하면 된다.
+    sources = f"웹검색 {len(web_results)}건 참고" if web_results else _summarize_tier2_sources(similar_docs)
+    return {"tier2_result": response.content, "tier2_sources": sources}
+
+
+def _web_search_tavily(query: str, max_results: int = 3, timeout: float = 5.0) -> list[dict]:
+    """"바로 물어보기" 전용 웹검색(Tavily) -- 내 필기/강의자료에 근거가 없을 때만
+    tier2_deep_agent가 호출한다(위 호출부 참고). API 실패/타임아웃/키 없음은
+    전부 조용히 빈 리스트로 처리 -- 바로 물어보기 응답 전체가 외부 API 장애로
+    멈추면 안 되므로(2026-10-12, 발표 시연 안전장치). 라우팅/다른 로직엔 영향
+    없음 -- 실패해도 그냥 "근거 없음" 상태로 평소처럼 진행됨.
+    """
+    api_key = os.environ.get("TAVILY_API_KEY")
+    if not api_key:
+        return []
+    try:
+        resp = requests.post(
+            "https://api.tavily.com/search",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={"query": query, "max_results": max_results},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        return resp.json().get("results", [])
+    except Exception:
+        return []
 
 
 def store_only(state: NoteMateState) -> dict:

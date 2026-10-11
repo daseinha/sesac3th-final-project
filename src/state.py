@@ -30,6 +30,14 @@ class NoteMateState(TypedDict):
     # get_all_notes()가 "전체 복원 화면"에서 한 줄의 여러 수정본을 중복 표시하지 않고
     # 최신 것만 고르게 해주는 키(2026-10-02, 새로고침 시 수정 내역이 전부 중복으로
     # 쌓여 보이던 버그 수정).
+    is_ask: bool  # 2026-10-12: "바로 물어보기"로 들어온 요청인가(서버가 origin_prefix
+    # == "ask"로 자동 판별해서 넘김). tier2_deep_agent가 이 값 + 근거 부족을 같이
+    # 봐서 웹검색(Tavily) 호출 여부를 결정 -- 조용한 힌트 경로는 절대 안 씀
+    # ([[deferred-web-search-addon]] 스코프 그대로: 바로 물어보기 전용).
+    allow_general_knowledge: bool  # 2026-10-12: Tier2가 참고할 만한 근거(강의자료/
+    # 내 필기)를 못 찾았을 때도 LLM 자기 지식만으로 힌트를 생성할지 여부. False면
+    # 근거가 없는 경우 힌트 생성 자체를 건너뛴다(tier2_deep_agent 참고) -- "힌트
+    # 남발" 우려 완화 + 근거 유무별 비교테스트용. 기본값은 True(기존 동작 그대로).
     dry_run: bool  # 2026-10-10: test:: 태그 입력을 "백엔드 호출 자체 스킵"에서
     # "기존 DB 근거로 실제 검색/힌트 생성은 돌리되 저장만 스킵"으로 바꾸기 위해
     # 추가. True면 persist_note가 DB insert와 세션 작업기억 등록을 건너뛴다 --

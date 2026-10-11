@@ -30,6 +30,8 @@ def ingest_note(
     client_line_id: str | None = None,
     dry_run: bool = False,
     inserted_out_of_place: bool = False,
+    allow_general_knowledge: bool = True,
+    is_ask: bool = False,
 ) -> NoteMateState:
     """필기 한 조각을 파이프라인에 투입하고, 처리 완료된 최종 State를 반환한다.
 
@@ -54,6 +56,13 @@ def ingest_note(
         inserted_out_of_place: 사용자가 타임라인 중 과거 세션/날짜 블록으로
             스크롤해서 그 자리에 입력한 경우 True. 판단/라우팅엔 안 쓰이고
             그대로 저장만 됨 -- 화면 표시용([[deferred-historical-note-insertion]]).
+        allow_general_knowledge: False면 Tier2가 참고할 근거(강의자료/내 필기)를
+            하나도 못 찾았을 때 LLM 자기 지식만으로 힌트를 만드는 걸 건너뛴다
+            (2026-10-12, 힌트 남발 완화 + 근거 유무별 비교테스트용). 기본값
+            True는 기존 동작(일반 지식으로라도 답변) 그대로.
+        is_ask: "바로 물어보기"로 들어온 요청이면 True(서버가 origin_prefix로
+            자동 판별해서 넘김). 근거 부족 + True일 때만 웹검색(Tavily)이
+            개입한다(2026-10-12) -- 조용한 힌트 경로에는 절대 안 씀.
 
     Returns:
         그래프 실행이 끝난 최종 State. routing_decision으로 Tier1/2 여부를,
@@ -70,6 +79,8 @@ def ingest_note(
         "client_line_id": client_line_id,
         "dry_run": dry_run,
         "inserted_out_of_place": inserted_out_of_place,
+        "allow_general_knowledge": allow_general_knowledge,
+        "is_ask": is_ask,
     }
     return graph.invoke(initial_state)
 

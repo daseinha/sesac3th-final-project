@@ -139,6 +139,7 @@ def api_ingest_note(
     client_line_id: str | None = Form(None),
     dry_run: bool = Form(False),
     inserted_out_of_place: bool = Form(False),
+    allow_general_knowledge: bool = Form(True),
 ) -> dict:
     """필기 한 조각(문단/줄 단위)을 받아 파이프라인에 투입.
 
@@ -171,6 +172,15 @@ def api_ingest_note(
     ([[deferred-historical-note-insertion]], 제대로 된 "실제 그 자리에
     소속"은 차후과제).
 
+    `allow_general_knowledge`: False면 Tier2가 근거(강의자료/내 필기)를 하나도
+    못 찾았을 때 힌트 생성 자체를 건너뛴다(2026-10-12, src/nodes.py
+    tier2_deep_agent 참고) -- 힌트 남발 완화 + 비교테스트용. 기본값 True는
+    기존 동작 그대로.
+
+    `is_ask`는 별도 Form 필드 없이 `origin_prefix == "ask"`로 자동 판별해서
+    넘김(2026-10-12) -- 근거 부족 + 바로 물어보기일 때만 웹검색(Tavily)이
+    개입하도록 src/nodes.py tier2_deep_agent가 이 값을 씀.
+
     content가 빈 문자열(필기 줄을 지우고 제출한 경우): 전체 파이프라인을
     타지 않고 `record_line_deletion()`으로 바로 간다(2026-10-10, 사용자
     요청 -- "수정이 되는데 삭제가 안 되는 건 이상하다"). `client_line_id`가
@@ -202,6 +212,8 @@ def api_ingest_note(
         client_line_id=client_line_id,
         dry_run=dry_run,
         inserted_out_of_place=inserted_out_of_place,
+        allow_general_knowledge=allow_general_knowledge,
+        is_ask=(origin_prefix == "ask"),
     )
     if dry_run:
         # note_chunks/세션 작업기억/힌트 노출 통계와 완전히 분리된 파일 --
