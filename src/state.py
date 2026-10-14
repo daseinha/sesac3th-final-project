@@ -30,6 +30,10 @@ class NoteMateState(TypedDict):
     # get_all_notes()가 "전체 복원 화면"에서 한 줄의 여러 수정본을 중복 표시하지 않고
     # 최신 것만 고르게 해주는 키(2026-10-02, 새로고침 시 수정 내역이 전부 중복으로
     # 쌓여 보이던 버그 수정).
+    upload_label: str | None  # 2026-10-12: 자료 업로드 UI에서 사용자가 고르거나 새로
+    # 만든 "분류명"(과목 선택 드롭다운과 같은 UX). 판단/라우팅엔 전혀 안 쓰이는 순수
+    # 통과 필드 -- client_line_id/inserted_out_of_place와 같은 패턴. 업로드 경로에서만
+    # 채워지고, 필기 입력 경로는 항상 None.
     is_ask: bool  # 2026-10-12: "바로 물어보기"로 들어온 요청인가(서버가 origin_prefix
     # == "ask"로 자동 판별해서 넘김). tier2_deep_agent가 이 값 + 근거 부족을 같이
     # 봐서 웹검색(Tavily) 호출 여부를 결정 -- 조용한 힌트 경로는 절대 안 씀

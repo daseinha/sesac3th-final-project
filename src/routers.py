@@ -33,11 +33,24 @@ def compute_routing_decision(state: NoteMateState) -> Literal["tier2", "store_on
     assessment = state["assessment"]
     top_score = state["top_score"]
 
-    # 세션 내에서 방금 다룬 내용과 거의 같으면, 질문이든 뭐든 상관없이 중복
+    # 질문은 사용자가 명시적으로 "알고 싶다"는 의도를 표시한 것이므로, 세션
+    # 중복 억제보다 우선순위가 높다(2026-10-14, 사용자 결정으로 순서 변경 --
+    # 원래는 세션중복 체크가 더 먼저였고 "질문이든 뭐든 상관없이" 억제했는데,
+    # 사용자가 명시적으로 뒤집음: "질문은 명시적 의도 표시니까 중복억제보다
+    # 우선순위가 높아야 한다"). 그래서 질문이면 세션중복 여부와 무관하게
+    # 무조건 tier2로 가서 매번 새로 생성된 답을 받는다 -- 같은 질문을 1분
+    # 뒤에 또 물어봐도 "조용히 저장됐어요" 같은 정형 문구 대신 실제 답변이
+    # 나간다.
+    if assessment and assessment["is_question"]:
+        return "tier2"
+
+    # 세션 내에서 방금 다룬 내용과 거의 같으면(그리고 "질문"이 아니면), 중복
     # 힌트를 만들지 않는다 (CLAUDE.md 6번 섹션 "용도1" -- 이미 방금 도와줬으므로).
     # 단, 그 "방금"이 SESSION_DUP_REALLOW_SECONDS보다 오래 전이면 억제를 풀어준다
     # -- 한참 지나 똑같은 내용을 또 썼다는 건 "중복"이 아니라 "아직도 이해가
-    # 안 돼서 다시 물어보는 것"일 수 있어서(2026-10-05).
+    # 안 돼서 다시 물어보는 것"일 수 있어서(2026-10-05). is_question 체크를
+    # 이 앞으로 옮기면서(위 참고) "질문이든 뭐든"이라는 전제는 더 이상
+    # 정확하지 않음 -- 이젠 "질문이 아닌 한" 이 억제가 적용됨.
     session_dup = state.get("session_duplicate_score")
     session_dup_elapsed = state.get("session_duplicate_elapsed_seconds")
     if (
@@ -46,9 +59,6 @@ def compute_routing_decision(state: NoteMateState) -> Literal["tier2", "store_on
         and (session_dup_elapsed is None or session_dup_elapsed <= SESSION_DUP_REALLOW_SECONDS)
     ):
         return "store_only"
-
-    if assessment and assessment["is_question"]:
-        return "tier2"
 
     # 힌트 피드백 반영 Phase 2(✓ 억제, 2026-10-08): 가장 비슷한 과거 필기가
     # "이미 알고 있음(✓)" 피드백을 받은 적 있고 그게 FEEDBACK_SUPPRESS_DAYS

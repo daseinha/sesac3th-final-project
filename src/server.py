@@ -30,8 +30,10 @@ from src.api import ingest_file, ingest_note
 from src.db import (
     get_all_notes,
     get_deleted_sessions,
+    get_recent_session_boundary,
     get_session_time_range,
     get_today_hints,
+    get_upload_labels,
     insert_deleted_session,
     record_hint_feedback,
     record_line_deletion,
@@ -324,12 +326,16 @@ async def api_ingest_file(
     file: UploadFile = File(...),
     source: str = Form("base"),
     course_id: str = Form(_DEFAULT_COURSE_ID),
+    upload_label: str | None = Form(None),
 ) -> dict:
     """업로드 버튼이 호출 -- 받은 파일을 data/<source>/에 저장한 뒤 ingest_file()로 처리.
 
     data/<source>/ 아래에 실물 파일로 남겨두는 이유: 기존 `ingest_folder.py`
     폴더 컨벤션과 그대로 호환되고(나중에 일괄 재처리/검증 스크립트가 그대로
     먹힘), 원본을 디스크에 보존해 문제 생기면 재인제스트 가능.
+
+    `upload_label`: 업로드 UI의 분류명 드롭다운(과목 선택과 같은 UX, 2026-10-12)
+    -- 판단/라우팅엔 안 쓰이고 note_chunks.upload_label 컬럼에 그대로 저장만 됨.
     """
     dest_dir = _PROJECT_ROOT / "data" / source
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -338,8 +344,17 @@ async def api_ingest_file(
     with open(dest_path, "wb") as f:
         f.write(await file.read())
 
-    results = ingest_file(str(dest_path), source=source, course_id=course_id)
+    results = ingest_file(str(dest_path), source=source, course_id=course_id, upload_label=upload_label)
     return {"chunks_saved": len(results), "filename": file.filename}
+
+
+@app.get("/api/upload_labels")
+def api_upload_labels() -> list[str]:
+    """업로드 분류명 드롭다운이 열릴 때 호출 -- 지금까지 실제로 쓰인 분류명
+    전부를 돌려준다(2026-10-12). 프론트엔드가 이걸 localStorage 목록과 합쳐서
+    보여줘서, 기기/브라우저가 달라도 기존에 쓴 분류명을 그대로 재사용할 수
+    있게 함(사용자 지적: "기존 메타데이터 값을 통일시켜 주는 게 좋다")."""
+    return get_upload_labels()
 
 
 @app.get("/api/today_hints")
@@ -357,13 +372,41 @@ def api_today_hints(course_id: str = _DEFAULT_COURSE_ID) -> list[dict]:
     ]
 
 
+@app.get("/api/recent_session_boundary")
+def api_recent_session_boundary(
+    course_id: str = _DEFAULT_COURSE_ID,
+    session_limit: int = 10,
+) -> dict:
+    """서비스 시작 분할 로딩의 경계 시각 -- 프론트엔드가 로딩 시작 때 제일
+    먼저 호출한다. 이 시각 이후(`after`)만 먼저 불러와 빠르게 화면을 띄우고,
+    이전(`before`)은 백그라운드에서 조용히 불러와 맨 위에 끼워 넣는다.
+
+    boundary가 null이면 "자를 필요 없이 전부 로딩"하라는 뜻 -- 히스토리가
+    작은 과목은 분할 자체가 무의미하므로 프론트엔드가 기존 동작(전체 한 번에
+    로딩)으로 자연히 돌아간다."""
+    boundary = get_recent_session_boundary(course_id, session_limit)
+    return {"boundary": boundary.isoformat() if boundary else None}
+
+
 @app.get("/api/all_notes")
-def api_all_notes(course_id: str = _DEFAULT_COURSE_ID) -> list[dict]:
+def api_all_notes(
+    course_id: str = _DEFAULT_COURSE_ID,
+    after: str | None = None,
+    before: str | None = None,
+) -> list[dict]:
     """페이지를 새로고침하거나 서비스를 재시작해도 이 과목의 필기 전체가 그대로
     복원되도록(2026-10-08, "종료 후 재시작 시 기존 필기가 떠있어야 한다"는
     요청 반영 -- 구 이름 api_today_notes, 날짜 제한 제거) -- 가짜 데모 문단
-    대신 입력된 personal 필기 전체(Tier1/2 가리지 않고)를 반환."""
-    notes = get_all_notes(course_id)
+    대신 입력된 personal 필기 전체(Tier1/2 가리지 않고)를 반환.
+
+    `after`/`before`(2026-10-14 추가, ISO 타임스탬프): 서비스 시작 속도
+    개선을 위한 분할 로딩에 쓰임 -- 최근분(`after`)은 빠르게 먼저 불러와
+    화면을 띄우고, 그 전 과거분(`before`)은 프론트엔드가 백그라운드에서
+    따로 불러와 조용히 맨 위에 끼워 넣는다(`/api/recent_session_boundary`
+    참고). 둘 다 안 주면 기존과 동일하게 전체를 반환."""
+    after_dt = datetime.fromisoformat(after) if after else None
+    before_dt = datetime.fromisoformat(before) if before else None
+    notes = get_all_notes(course_id, after=after_dt, before=before_dt)
     return [
         {
             "content": n["content"],
@@ -438,9 +481,18 @@ def api_delete_session(
 
 
 @app.get("/api/deleted_sessions")
-def api_deleted_sessions(course_id: str = _DEFAULT_COURSE_ID) -> list[dict]:
-    """필기 타임라인에 "N번째 필기세션 삭제됨" 구분선을 끼워 넣기 위한 묘비 목록."""
-    rows = get_deleted_sessions(course_id)
+def api_deleted_sessions(
+    course_id: str = _DEFAULT_COURSE_ID,
+    after: str | None = None,
+    before: str | None = None,
+) -> list[dict]:
+    """필기 타임라인에 "N번째 필기세션 삭제됨" 구분선을 끼워 넣기 위한 묘비 목록.
+
+    `after`/`before`(2026-10-14): /api/all_notes와 같은 분할 로딩 경계를
+    묘비 쪽에도 동일하게 적용."""
+    after_dt = datetime.fromisoformat(after) if after else None
+    before_dt = datetime.fromisoformat(before) if before else None
+    rows = get_deleted_sessions(course_id, after=after_dt, before=before_dt)
     return [
         {
             "day_key": r["day_key"],

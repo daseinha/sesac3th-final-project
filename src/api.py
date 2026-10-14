@@ -32,6 +32,7 @@ def ingest_note(
     inserted_out_of_place: bool = False,
     allow_general_knowledge: bool = True,
     is_ask: bool = False,
+    upload_label: str | None = None,
 ) -> NoteMateState:
     """필기 한 조각을 파이프라인에 투입하고, 처리 완료된 최종 State를 반환한다.
 
@@ -63,6 +64,8 @@ def ingest_note(
         is_ask: "바로 물어보기"로 들어온 요청이면 True(서버가 origin_prefix로
             자동 판별해서 넘김). 근거 부족 + True일 때만 웹검색(Tavily)이
             개입한다(2026-10-12) -- 조용한 힌트 경로에는 절대 안 씀.
+        upload_label: 자료 업로드 UI에서 사용자가 고르거나 새로 만든 분류명
+            (2026-10-12). 판단/라우팅엔 안 쓰이고 그대로 저장만 됨.
 
     Returns:
         그래프 실행이 끝난 최종 State. routing_decision으로 Tier1/2 여부를,
@@ -81,6 +84,7 @@ def ingest_note(
         "inserted_out_of_place": inserted_out_of_place,
         "allow_general_knowledge": allow_general_knowledge,
         "is_ask": is_ask,
+        "upload_label": upload_label,
     }
     return graph.invoke(initial_state)
 
@@ -102,12 +106,16 @@ def ingest_file(
     source: Literal["personal", "base", "stt_reference"],
     course_id: str | None = None,
     session_id: str | None = None,
+    upload_label: str | None = None,
 ) -> list[NoteMateState]:
     """업로드된 파일 하나를 확장자로 판별해 알맞은 어댑터로 파싱하고,
     각 조각을 순서대로 ingest_note()에 투입한다.
 
     사용자/프론트엔드는 "업로드 버튼 하나"로 이 함수만 호출하면 되고,
     txt/PDF 등 형식 차이는 이 함수 내부(어댑터 선택)에서만 처리된다.
+
+    upload_label: 업로드 UI에서 사용자가 고르거나 새로 만든 분류명(2026-10-12).
+        이 파일에서 나온 모든 조각에 똑같이 붙는다.
     """
     ext = Path(path).suffix.lower()
     if ext not in _FILE_ADAPTERS:
@@ -126,6 +134,7 @@ def ingest_file(
             course_id=course_id,
             timestamp=note.timestamp,
             session_id=session_id,
+            upload_label=upload_label,
         )
         for note in notes
     ]

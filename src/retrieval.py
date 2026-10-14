@@ -58,20 +58,28 @@ class _VectorRetriever(BaseRetriever):
 
 def build_hybrid_retriever(
     course_id: str | None, k: int = 5, query_embedding: list[float] | None = None
-) -> EnsembleRetriever | None:
+) -> tuple[EnsembleRetriever | None, BM25Retriever | None]:
     """벡터 검색 + BM25(Kiwi) 결합 리트리버 생성.
 
     BM25 인덱스는 course_id 범위의 note_chunks를 매번 새로 불러와 즉석에서
     만든다(LangChain BM25Retriever가 인메모리 방식이라서 -- MVP 단계에서는
     코퍼스가 수천 건 수준이라 감당 가능, 나중에 규모 커지면 캐싱 고려).
-    코퍼스가 비어있으면 None -- 호출부에서 벡터 검색만으로 대체 처리.
+    코퍼스가 비어있으면 (None, None) -- 호출부에서 벡터 검색만으로 대체 처리.
 
     query_embedding: 호출부가 쿼리 텍스트의 임베딩을 이미 갖고 있으면 넘겨서
     벡터 검색 쪽이 또 임베딩하지 않게 한다(2026-10-02, _VectorRetriever 참고).
+
+    반환값이 (ensemble, bm25) 튜플로 바뀜(2026-10-14) -- "힌트 근거 표시"가
+    벡터 유사도만 보고 판단하다가(순수 의미 유사도만으론 "AI", "모델" 같은
+    흔한 단어가 겹치는 완전히 무관한 질문도 통과시켜버리는 오탐이 실사용 중
+    확인됨), BM25도 같은 문서를 짚었는지 교차 확인하도록 바꾸기 위함
+    (src/nodes.py의 _filter_relevant_docs 참고). bm25 자체를 따로 노출해두면
+    호출부가 코퍼스를 또 가져와 인덱스를 다시 만드는 비용(여기가 진짜 느린
+    부분) 없이 `bm25.invoke()`(가벼운 점수 계산만)만 한 번 더 부르면 됨.
     """
     corpus = fetch_corpus_for_bm25(course_id)
     if not corpus:
-        return None
+        return None, None
 
     texts = [row["content"] for row in corpus]
     metadatas = [{"source": row["source"], "origin_ref": row["origin_ref"]} for row in corpus]
@@ -80,4 +88,5 @@ def build_hybrid_retriever(
 
     vector_retriever = _VectorRetriever(course_id=course_id, k=k, embedding=query_embedding)
 
-    return EnsembleRetriever(retrievers=[vector_retriever, bm25], weights=[0.5, 0.5])
+    ensemble = EnsembleRetriever(retrievers=[vector_retriever, bm25], weights=[0.5, 0.5])
+    return ensemble, bm25

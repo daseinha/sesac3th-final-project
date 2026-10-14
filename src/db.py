@@ -250,7 +250,74 @@ def get_today_hints(course_id: str | None) -> list[dict]:
             return [dict(zip(columns, row)) for row in cur.fetchall()]
 
 
-def get_all_notes(course_id: str | None) -> list[dict]:
+def get_recent_session_boundary(course_id: str | None, session_limit: int) -> datetime | None:
+    """최근 N개 "활성 단위"(세션 또는 날짜) 중 가장 오래된 것이 속한 날의
+    자정(KST) 시각을 반환한다 -- 서비스 시작 시 전체 히스토리를 한꺼번에
+    불러오지 않고 최근 분량만 먼저 보여주기 위한 경계값(2026-10-14, 사용자
+    지적: "서비스 시작할 때 로딩이 너무 오래 걸린다").
+
+    단위(unit) = session_id가 있으면 그 값, 없으면(세션 개념이 생기기 전
+    과거 데이터) 날짜(KST)로 대체 -- 프론트엔드 날짜 구분선이 사실상 그
+    역할을 이미 하고 있어서 자연스러운 대체.
+
+    삭제된 세션(deleted_sessions)은 집계에서 아예 제외한다 -- 테스트하다
+    세션을 여러 번 만들었다 지운 경우까지 "최근 N개"에 들어가면 실제 보여줄
+    분량이 의도보다 줄어든다(2026-10-14 사용자 지적: "삭제세션은 자르는
+    기준에서 제외하고 분량을 계산해야겠지").
+
+    경계는 "그 단위가 시작한 세션/날짜 단위"가 아니라 반드시 "그 날의
+    자정"으로 반올림한다 -- 세션 단위로 정확히 끊으면, 하루에 세션이 여러
+    번 있었을 때 그 날의 첫 세션이 잘려나가 "최근 창의 첫 세션"이 실제로는
+    그 날의 2번째/3번째 세션인데도 화면엔 "새 필기 시작"(1번째)으로 잘못
+    표시되는 문제가 생긴다. 항상 날짜 단위로 자르면 이 경계가 날짜 경계와도
+    겹쳐서, 나중에 그 이전 분량을 배경에서 불러와 위에 끼워 넣을 때도 두
+    구간의 날짜/세션 번호 매기기가 서로 전혀 간섭하지 않는다(완전히 독립된
+    날짜들이라 번호를 재계산할 필요가 없음).
+
+    전체 활성 단위 수가 session_limit 이하면 None을 반환한다 -- "자를 필요
+    없이 전부 로딩하라"는 뜻으로 해석된다(히스토리가 작은 과목/신규 과목은
+    이 분할 로딩 자체가 무의미하므로 자연히 기존 동작 그대로 유지됨).
+
+    "바로 물어보기"(`ask:` origin_ref)도 2026-10-14부터 단위 집계에 포함한다
+    -- get_all_notes()와 같은 이유(질문도 타임라인의 일부). 질문만 있고
+    일반 필기가 없는 세션도 "활성 세션 1개"로 정상 집계된다.
+    """
+    pool = get_pool()
+    course_filter = "AND course_id = %(course_id)s" if course_id else ""
+    query = f"""
+        WITH units AS (
+            SELECT
+                COALESCE(session_id::text, to_char(created_at AT TIME ZONE 'Asia/Seoul', 'YYYYMMDD')) AS unit_key,
+                created_at
+            FROM note_chunks
+            WHERE source = 'personal'
+              AND content != ''
+              {course_filter}
+              {_ACTIVE_SESSION_FILTER}
+        ),
+        unit_bounds AS (
+            SELECT unit_key, MIN(created_at) AS started_at
+            FROM units
+            GROUP BY unit_key
+        ),
+        ranked AS (
+            SELECT started_at, ROW_NUMBER() OVER (ORDER BY started_at DESC) AS rn
+            FROM unit_bounds
+        )
+        SELECT (date_trunc('day', started_at AT TIME ZONE 'Asia/Seoul') AT TIME ZONE 'Asia/Seoul')
+        FROM ranked
+        WHERE rn = %(session_limit)s;
+    """
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, {"course_id": course_id, "session_limit": session_limit})
+            row = cur.fetchone()
+            return row[0] if row else None
+
+
+def get_all_notes(
+    course_id: str | None, after: datetime | None = None, before: datetime | None = None
+) -> list[dict]:
     """이 과목의 personal 필기 전체(날짜 제한 없이)를 오래된순으로 반환.
 
     2026-10-08 전까지는 `created_at::date = CURRENT_DATE`로 "오늘"만 걸러서
@@ -262,9 +329,15 @@ def get_all_notes(course_id: str | None) -> list[dict]:
     tier2로 간 것만 거르지 않고 personal 소스 전체를 가져온다(2026-10-02,
     새로고침 시 가짜 데모 문단이 아니라 실제 필기가 보여야 한다는 지적 반영).
 
-    `origin_ref`가 `ask:`로 시작하는 것(필기창이 아니라 "지금 바로 물어보기"
-    입력창에서 온 즉석 질문)은 제외한다 -- 안 그러면 새로고침할 때 질문이
-    필기창에 필기 한 줄처럼 복원돼버림(2026-10-02 실측 버그, api.py 참고).
+    `origin_ref`가 `ask:`로 시작하는 것("지금 바로 물어보기"로 들어온 즉석
+    질문)도 2026-10-14부터 포함한다 -- 사용자 요구: "질문도 학습의 일종,
+    입력 통로가 다를 뿐 타임라인 기록에 포함되는 게 맞다. 필기와 힌트표시
+    통합, 작동 방식도 동일(마커 형태/색깔만 구분용으로 다름)". 2026-10-02엔
+    반대로 제외해야 했는데(그때는 질문이 필기 한 줄처럼 그대로 복원돼버려
+    실제 필기와 구분이 안 됐던 버그), 그 문제는 프론트엔드가 `origin_ref`의
+    `ask:` 접두사를 보고 필기와 다른 모양(파란 로그 줄 + 다른 색 마커)으로
+    렌더링하도록 바뀌면서 해결됐다(notemate_mockup.html의 `isAskRow()`/
+    `renderAskLineFast()` 참고) -- 이제는 제외할 이유가 없어짐.
 
     note_chunks는 RAG 재료용으로 append-only가 원칙이라(수정해도 새 행이
     또 쌓임), 같은 필기 줄을 고쳐서 여러 번 제출하면 그 모든 버전이 그대로
@@ -301,9 +374,45 @@ def get_all_notes(course_id: str | None) -> list[dict]:
     (search_similar_chunks 등)은 이 필터와 무관하게 이전 버전(실제 내용)을
     계속 검색 대상으로 쓴다 -- 화면 삭제가 RAG 코퍼스에는 전파되지 않는
     의도된 설계(사용자 방침: "RAG는 지식 로그라 쌓여있는 게 좋다").
+
+    `after`/`before`(2026-10-14 추가): 분할 로딩(get_recent_session_boundary
+    참고)을 위한 선택적 시간 범위 필터. 실측해보니(2026-10-14) `ROW_NUMBER()`
+    중복제거 + `_ACTIVE_SESSION_FILTER`(행마다 서브쿼리)가 전체 테이블
+    기준으로 계산되는 게 진짜 병목이었음 -- 반환되는 행 수를 줄여도 이
+    계산 자체를 안 줄이면 쿼리 시간이 거의 안 줄어든다(실측: 32건만 반환
+    해도 1초 가까이 걸림, 반면 이 계산 자체를 뺀 단순 필터는 0.2초). 그래서
+    아래 두 경우를 구분한다:
+    - **`after`만 있고 `before`는 없음(최근 창, 빠른 경로)**: CTE 안쪽
+      (중복제거 전)에서부터 시간 필터를 걸어도 안전하다 -- 어떤 줄의 진짜
+      최신 버전이 `created_at >= after`라면, 그보다 더 이전(= 더 작은
+      created_at)인 다른 버전들은 전부 "더 과거"일 뿐이라 자동으로 같은
+      조건을 만족하지 못해 제외되고, 그 줄의 더 나중 버전은 존재할 수
+      없으므로(나중 버전은 정의상 더 큰 created_at이라 역시 `>= after`를
+      만족) 입력을 좁혀도 rn=1 결과가 달라지지 않는다. 그래서 이 경우만
+      입력 자체를 좁혀 무거운 계산 비용을 크게 줄인다.
+    - **`before`가 있는 경우(배경 과거분 로딩, 느려도 되는 경로)**: 입력을
+      `created_at < before`로 미리 좁히면 위험하다 -- 어떤 줄의 더 오래된
+      버전은 이 범위 안에 있는데 진짜 최신 버전은 `before` 이후(이미 "최근
+      창"으로 따로 보여준 부분)에 있는 경우, 좁혀진 범위 안에서는 그 최신
+      버전의 존재를 모르니 오래된 버전을 최신인 것처럼 잘못 뽑아버릴 수
+      있다. 이 경로는 어차피 체감 속도에 영향이 없는 백그라운드 로딩이라,
+      안전한(느린) 전체 계산 후 바깥쪽 필터 방식을 그대로 유지한다.
     """
     pool = get_pool()
     course_filter = "AND course_id = %(course_id)s" if course_id else ""
+    params: dict = {"course_id": course_id}
+    inner_time_filter = ""
+    outer_time_filter = ""
+    if after is not None and before is None:
+        inner_time_filter = " AND created_at >= %(after)s"
+        params["after"] = after
+    else:
+        if after is not None:
+            outer_time_filter += " AND created_at >= %(after)s"
+            params["after"] = after
+        if before is not None:
+            outer_time_filter += " AND created_at < %(before)s"
+            params["before"] = before
     query = f"""
         WITH all_notes AS (
             SELECT content, tier2_result, tier2_sources, created_at, client_line_id, origin_ref, session_id,
@@ -313,19 +422,19 @@ def get_all_notes(course_id: str | None) -> list[dict]:
                    ) AS rn
             FROM note_chunks
             WHERE source = 'personal'
-              AND origin_ref NOT LIKE 'ask:%%'
               {course_filter}
               {_ACTIVE_SESSION_FILTER}
+              {inner_time_filter}
         )
         SELECT content, tier2_result, tier2_sources, created_at, client_line_id, origin_ref, session_id,
                inserted_out_of_place
         FROM all_notes
-        WHERE (client_line_id IS NULL OR rn = 1) AND content != ''
+        WHERE (client_line_id IS NULL OR rn = 1) AND content != '' {outer_time_filter}
         ORDER BY created_at ASC;
     """
     with pool.connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(query, {"course_id": course_id})
+            cur.execute(query, params)
             columns = [c.name for c in cur.description]
             return [dict(zip(columns, row)) for row in cur.fetchall()]
 
@@ -386,21 +495,38 @@ def insert_deleted_session(
             )
 
 
-def get_deleted_sessions(course_id: str | None) -> list[dict]:
-    """이 과목에서 삭제된 세션 묘비 전체를 반환 -- loadAllNotes()가 필기
-    타임라인에 "N번째 필기세션 삭제됨" 구분선을 끼워 넣는 데 쓴다.
+def get_deleted_sessions(
+    course_id: str | None, after: datetime | None = None, before: datetime | None = None
+) -> list[dict]:
+    """이 과목에서 삭제된 세션 묘비를 반환 -- loadAllNotes()가 필기 타임라인에
+    "N번째 필기세션 삭제됨" 구분선을 끼워 넣는 데 쓴다.
+
+    `after`/`before`(2026-10-14): get_all_notes()와 같은 분할 로딩 경계를
+    묘비 쪽에도 똑같이 적용 -- 안 그러면 초기(최근) 창에서 "최근 세션들
+    사이에 지워진 세션"이 빠지거나, 배경(과거) 로딩 때 같은 묘비가 중복으로
+    다시 나타날 수 있다. `session_started_at`(삭제 시각이 아니라 그 세션이
+    원래 시작됐던 시각) 기준으로 자른다 -- get_all_notes()가 note_chunks의
+    `created_at`으로 자르는 것과 같은 축.
     """
     pool = get_pool()
     course_filter = "AND course_id = %(course_id)s" if course_id else ""
+    params: dict = {"course_id": course_id}
+    time_filter = ""
+    if after is not None:
+        time_filter += " AND session_started_at >= %(after)s"
+        params["after"] = after
+    if before is not None:
+        time_filter += " AND session_started_at < %(before)s"
+        params["before"] = before
     query = f"""
         SELECT day_key, ordinal, session_started_at
         FROM deleted_sessions
-        WHERE true {course_filter}
+        WHERE true {course_filter} {time_filter}
         ORDER BY session_started_at ASC;
     """
     with pool.connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(query, {"course_id": course_id})
+            cur.execute(query, params)
             columns = [c.name for c in cur.description]
             return [dict(zip(columns, row)) for row in cur.fetchall()]
 
@@ -443,14 +569,16 @@ def insert_note_chunk(row: dict) -> None:
             top_score, is_question, is_abbreviated, is_new_concept,
             session_duplicate_score, routing_decision, tier2_result, embedding,
             client_line_id, hint_category, top_match_feedback_value,
-            top_match_feedback_days_ago, session_id, tier2_sources, inserted_out_of_place
+            top_match_feedback_days_ago, session_id, tier2_sources, inserted_out_of_place,
+            upload_label
         ) VALUES (
             %(content)s, %(source)s, %(medium)s, %(course_id)s,
             %(note_timestamp)s, %(origin_ref)s,
             %(top_score)s, %(is_question)s, %(is_abbreviated)s, %(is_new_concept)s,
             %(session_duplicate_score)s, %(routing_decision)s, %(tier2_result)s, %(embedding)s::vector,
             %(client_line_id)s, %(hint_category)s, %(top_match_feedback_value)s,
-            %(top_match_feedback_days_ago)s, %(session_id)s, %(tier2_sources)s, %(inserted_out_of_place)s
+            %(top_match_feedback_days_ago)s, %(session_id)s, %(tier2_sources)s, %(inserted_out_of_place)s,
+            %(upload_label)s
         )
         ON CONFLICT (origin_ref) DO NOTHING;
     """
@@ -598,3 +726,27 @@ def save_period_summary(
                     "tier2_count": tier2_count,
                 },
             )
+
+
+def get_upload_labels() -> list[str]:
+    """지금까지 실제로 쓰인 업로드 분류명(`upload_label`)을 중복 없이 반환.
+
+    2026-10-12: 사용자 지적 -- "분류명을 매번 새로 입력하게 두면 같은 뜻인데
+    표현만 다른 값들이 생길 수 있으니, 기존에 쓰인 값을 먼저 보여줘서 재사용을
+    유도하는 게 낫다". 프론트엔드가 드롭다운을 열 때 이걸 불러와서 localStorage
+    목록과 합친다 -- 그래야 다른 브라우저/기기에서 이미 쓴 분류명도 그대로
+    보임(지금까지는 브라우저별 localStorage에만 있어서 기기마다 따로 놀았음).
+    course_id로 안 좁히는 이유: 분류명은 "어떤 문서 종류인가"(강의자료/실습자료
+    등) 개념이라 과목보다 상위 축이라고 보는 게 맞음.
+    """
+    pool = get_pool()
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT upload_label FROM note_chunks
+                WHERE upload_label IS NOT NULL AND upload_label != ''
+                ORDER BY upload_label;
+                """
+            )
+            return [row[0] for row in cur.fetchall()]

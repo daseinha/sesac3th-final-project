@@ -187,7 +187,7 @@ _TIER2_SYSTEM_PROMPT = (
 _SOURCE_LABELS = {"personal": "내 필기", "base": "강의자료", "stt_reference": "참고자료"}
 
 
-def _summarize_tier2_sources(similar_docs: list) -> str:
+def _summarize_tier2_sources(similar_docs: list, bm25_origin_refs: set | None = None) -> str:
     """검색된 참고 문서들의 source 구성을 사용자가 읽을 짧은 문구로 요약.
 
     "비율"(답변 텍스트의 몇 %가 어디서 왔는지)은 LLM이 그렇게 출처를 태깅하며
@@ -224,8 +224,20 @@ def _summarize_tier2_sources(similar_docs: list) -> str:
     재발한 것). 결론: 크기 기준 자체는 필요하지만 0.75는 라우팅 트리거와
     충돌해서 못 쓴다는 것 -- `SOURCE_RELEVANCE_FLOOR`(0.35, 위 선언 참고)로
     새로 분리해서 적용.
+
+    2026-10-14 3차 수정: 0.40으로도 실사용 중 다시 뚫림 -- "오늘 AI 관련
+    뉴스", "최근 AI가 푼 수학 난제", "제미나이 최신 모델" 같은 질문들이
+    우연히 0.40을 넘겨서 "내 필기 N건 참고"로 표시됐는데, 실제 답변은 전부
+    할루시네이션이었음(그날 AI/LLM 관련 필기를 많이 써서 "AI", "모델" 같은
+    흔한 단어의 임베딩 공간 근접성만으로 점수가 올라간 것으로 추정). 벡터
+    유사도 "크기"만으로는 이 노이즈를 못 거른다는 게 재확인됨 -- 그래서
+    기준을 하나 더 추가: 같은 문서를 **BM25(키워드 기반)도 독립적으로
+    짚었는지** 교차 확인한다. 벡터는 "의미가 비슷하다"만 보고 BM25는 "실제
+    단어가 겹친다"만 보는, 서로 다른 종류의 신호라서 둘 다 동의해야 "진짜
+    근거"로 인정 -- 벡터 혼자만의 우연한 근접성(오늘 사례들의 패턴)은 이제
+    안 통과함.
     """
-    relevant_docs = _filter_relevant_docs(similar_docs)
+    relevant_docs = _filter_relevant_docs(similar_docs, bm25_origin_refs)
     if not relevant_docs:
         return "일반 지식(LLM 사전학습) 기반"
     counts: dict[str, int] = {}
@@ -235,15 +247,23 @@ def _summarize_tier2_sources(similar_docs: list) -> str:
     return " · ".join(f"{_SOURCE_LABELS.get(s, s)} {n}건" for s, n in counts.items()) + " 참고"
 
 
-def _filter_relevant_docs(similar_docs: list) -> list:
-    """SOURCE_RELEVANCE_FLOOR 이상인 문서만 "진짜 근거"로 인정.
+def _filter_relevant_docs(similar_docs: list, bm25_origin_refs: set | None = None) -> list:
+    """SOURCE_RELEVANCE_FLOOR 이상"이면서 "BM25도 독립적으로 같은 문서를
+    짚었을 때"만 "진짜 근거"로 인정(2026-10-14, 벡터 유사도 단독 기준으로는
+    우연한 의미적 근접성을 못 걸러낸다는 게 실사용 중 재확인되어 보강).
+
+    `bm25_origin_refs`가 None이면(호출부가 BM25 결과를 안 넘긴 경우) 이
+    두 번째 조건은 건너뛴다 -- 기존처럼 유사도 크기만 본다(하위 호환).
 
     `_summarize_tier2_sources`(출처 표시용)와 `tier2_deep_agent`(일반지식
     옵션 끌 때 생성 여부 판단용) 둘 다 "근거가 있는가"를 똑같은 기준으로
     판단해야 해서 분리(2026-10-12, allow_general_knowledge 옵션 추가하며
     중복 로직 정리).
     """
-    return [d for d in similar_docs if (d.metadata.get("similarity") or 0) >= SOURCE_RELEVANCE_FLOOR]
+    docs = [d for d in similar_docs if (d.metadata.get("similarity") or 0) >= SOURCE_RELEVANCE_FLOOR]
+    if bm25_origin_refs is None:
+        return docs
+    return [d for d in docs if d.metadata.get("origin_ref") in bm25_origin_refs]
 
 
 def tier2_deep_agent(state: NoteMateState) -> dict:
@@ -267,10 +287,16 @@ def tier2_deep_agent(state: NoteMateState) -> dict:
       - 단기 기억(세션 내 InMemory VectorStore) 검색 -- 아직 세션 개념 없음
       - 원본 드릴다운(origin_ref로 원본 파일 실제 열람) -- 지금은 origin_ref 텍스트만 참고
     """
-    retriever = build_hybrid_retriever(
+    retriever, bm25 = build_hybrid_retriever(
         course_id=state.get("course_id"), k=5, query_embedding=state.get("embedding")
     )
     similar_docs = retriever.invoke(state["content"]) if retriever else []
+    # BM25를 독립적으로 한 번 더 불러서(인덱스는 위에서 이미 만들어진 걸
+    # 재사용 -- invoke() 자체는 가벼운 점수 계산만이라 비용 추가 미미)
+    # "벡터가 찾은 문서를 BM25도 동의하는지" 교차 확인용 origin_ref 집합을
+    # 만든다(2026-10-14, _filter_relevant_docs 설명 참고).
+    bm25_docs = bm25.invoke(state["content"]) if bm25 else []
+    bm25_origin_refs = {d.metadata.get("origin_ref") for d in bm25_docs}
 
     # allow_general_knowledge=False(2026-10-12 추가) + 근거 자료가 하나도 없으면
     # LLM 호출 자체를 건너뛴다 -- "검색은 됐는데 생성 내용이 부정확"한 것과는
@@ -283,11 +309,28 @@ def tier2_deep_agent(state: NoteMateState) -> dict:
     # 바로 물어보기는 사용자가 직접 물은 "질문"이라 무응답으로 넘기면 안 됨.
     # 대신 바로 아래 웹검색 분기가 먼저 기회를 갖고, 거기서도 못 찾으면
     # 그쪽이 "못 찾았다"는 정직한 답변을 책임진다.
+    #
+    # 2026-10-14 보강(사용자 지적): is_ask가 아니어도(필기창에 그냥 물음표로
+    # 적은 질문도) "질문"이면 똑같이 완전 침묵은 안 됨 -- "질문은 사용자가
+    # 명시적으로 알고 싶다는 의도 표시"라서, 답을 못 내놓는 경우에도 "왜
+    # 못 내놓는지"가 답변 내용에 명시적으로 나와야 한다는 원칙(위 라우팅
+    # 우선순위 변경과 같은 결). 이 조합(질문 + 근거 없음 + 일반지식 옵션
+    # 꺼짐 + is_ask 아님)은 바로 아래 웹검색 분기도 안 타므로(is_ask 전용),
+    # 여기서 바로 그 이유를 명시한 정형 문구로 답한다 -- LLM이 옵션을
+    # 무시하고 몰래 일반지식으로 답해버리면 안 되므로 LLM 호출 없이 결정론적으로.
+    is_question = bool((state.get("assessment") or {}).get("is_question"))
     if (
         not state.get("allow_general_knowledge", True)
         and not state.get("is_ask")
-        and not _filter_relevant_docs(similar_docs)
+        and not _filter_relevant_docs(similar_docs, bm25_origin_refs)
     ):
+        if is_question:
+            return {
+                "tier2_result": "강의자료·내 필기 어디에서도 관련 정보를 찾지 못했고, "
+                "LLM 기본지식 옵션도 꺼져 있어서 답변을 만들지 못했어요. "
+                "옵션을 켜거나 질문을 조금 더 구체적으로 다시 적어주세요.",
+                "tier2_sources": "근거 자료 없음 (일반지식 옵션 꺼짐)",
+            }
         return {
             "tier2_result": None,
             "tier2_sources": "근거 자료 없음 -- 일반지식 옵션 꺼짐으로 힌트 생성 건너뜀",
@@ -298,7 +341,7 @@ def tier2_deep_agent(state: NoteMateState) -> dict:
     # ([[deferred-web-search-addon]] 스코프: 바로 물어보기 전용). 이미 근거가
     # 충분하면(검색이 잘 됐으면) 웹검색은 호출 자체를 안 해서 속도 영향도 없음.
     web_results = []
-    if state.get("is_ask") and not _filter_relevant_docs(similar_docs):
+    if state.get("is_ask") and not _filter_relevant_docs(similar_docs, bm25_origin_refs):
         web_results = _web_search_tavily(state["content"])
         if not web_results:
             # 바로 물어보기 + 내 필기/강의자료 근거 없음 + 웹검색도 결과 없음(또는
@@ -320,12 +363,29 @@ def tier2_deep_agent(state: NoteMateState) -> dict:
     context = "\n".join(context_lines) if context_lines else "(참고할 만한 이전 필기 없음)"
 
     assessment = state.get("assessment") or {}
+    # 웹검색이 실제로 개입한 경우(= 로컬 자료에 근거 없음 + 바로 물어보기)
+    # 에만 적용되는 추가 지시(2026-10-14, 사용자 요청): "LLM 기본지식만으로
+    # 추측하지 말고, 웹검색 결과와 비교해서 대체로 일치하면 그대로 답하고,
+    # 불일치하면 웹검색 쪽이 더 최신 정보일 가능성이 높으니 그걸 우선해서
+    # 종합하라"는 명시적 비교 지시를 추가. 이전엔 웹검색 결과를 그냥 컨텍스트
+    # 목록에 끼워 넣기만 하고 "어떻게 활용할지"는 LLM 재량에 맡겼는데, 그러면
+    # LLM이 자기 사전학습 지식을 그대로 내보내고 웹검색 결과는 사실상 무시할
+    # 위험이 있음(베타테스트 중 관찰된 패턴).
+    compare_instruction = ""
+    if web_results:
+        compare_instruction = (
+            "\n\n위 참고자료에는 웹검색 결과가 포함되어 있습니다. 당신이 사전학습으로 "
+            "이미 알고 있는 지식과 이 웹검색 결과를 비교하세요 -- 대체로 일치하면 "
+            "그 내용 그대로 답변하고, 만약 서로 다르다면 웹검색 결과가 더 최신 정보일 "
+            "가능성이 높으니 그것을 우선해서 반영한 답변을 작성하세요."
+        )
     user_prompt = (
         f"방금 필기: {state['content']}\n\n"
         f"판단: is_question={assessment.get('is_question')}, "
         f"is_abbreviated={assessment.get('is_abbreviated')}, "
         f"is_new_concept={assessment.get('is_new_concept')}\n\n"
         f"참고할 이전 필기/웹검색 결과 (관련도 순):\n{context}"
+        f"{compare_instruction}"
     )
 
     response = invoke_chat(
@@ -339,7 +399,11 @@ def tier2_deep_agent(state: NoteMateState) -> dict:
     # 채워지는 경우는 항상 _filter_relevant_docs(similar_docs)가 비어있을 때라서
     # (= _summarize_tier2_sources가 "일반 지식" 라벨을 돌려줄 상황), 그 라벨을
     # "웹검색 N건 참고"로 바꿔치기하면 된다.
-    sources = f"웹검색 {len(web_results)}건 참고" if web_results else _summarize_tier2_sources(similar_docs)
+    sources = (
+        f"웹검색 {len(web_results)}건 참고"
+        if web_results
+        else _summarize_tier2_sources(similar_docs, bm25_origin_refs)
+    )
     return {"tier2_result": response.content, "tier2_sources": sources}
 
 
@@ -443,6 +507,9 @@ def persist_note(state: NoteMateState) -> dict:
         # 2026-10-10: 과거 세션/날짜 블록에 끼워넣은 입력인지 표시용 플래그
         # ([[deferred-historical-note-insertion]]). 판단/라우팅엔 안 쓰임.
         "inserted_out_of_place": state.get("inserted_out_of_place"),
+        # 2026-10-12: 자료 업로드 UI의 분류명 드롭다운에서 고르거나 새로
+        # 만든 값. 판단/라우팅엔 안 쓰이고 그대로 저장만 됨.
+        "upload_label": state.get("upload_label"),
     }
     insert_note_chunk(row)
 
