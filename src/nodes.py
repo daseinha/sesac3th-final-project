@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 import requests
 from pydantic import BaseModel, Field
 
-from src.db import insert_note_chunk, search_top_similarity
+from src.db import insert_note_chunk, log_failed_ingestion, search_top_similarity
 from src.llm import embed_text, invoke_chat, invoke_structured
 from src.retrieval import build_hybrid_retriever
 from src.routers import compute_routing_decision
@@ -286,7 +286,39 @@ def tier2_deep_agent(state: NoteMateState) -> dict:
     TODO:
       - 단기 기억(세션 내 InMemory VectorStore) 검색 -- 아직 세션 개념 없음
       - 원본 드릴다운(origin_ref로 원본 파일 실제 열람) -- 지금은 origin_ref 텍스트만 참고
+
+    2026-10-15: 검색(DB)/생성(LLM) 호출을 전부 try/except로 감싼다 -- 외부 리뷰
+    (노트메이트_리뷰종합_ClaudeGemini_2026-10-14.md Q3-b) 지적 + 직접 코드 확인으로
+    발견한 실제 공백: 여태까지 이 함수엔 예외 처리가 전혀 없어서, 57일 전체를
+    순차 재생하는 4차 사이클 도중 OpenAI API가 단 한 번이라도 타임아웃/일시
+    오류를 내면 재생 스크립트 전체가 죽고 그 날의 나머지 필기가 통째로
+    유실될 위험이 있었음. is_question을 try 블록 밖에서 먼저 계산해둬서,
+    실패해도 "질문이면 침묵 대신 사유 문구"라는 기존 원칙(2026-10-14, 질문
+    우선순위 설계와 같은 결)을 그대로 지킨다. 실패 사실은 log_failed_ingestion()
+    (기존 Dead Letter 패턴, parse_vision_pdf_notes에서 쓰던 것과 동일)으로
+    남겨서 조용히 삼키지 않는다.
     """
+    is_question = bool((state.get("assessment") or {}).get("is_question"))
+    try:
+        return _tier2_deep_agent_inner(state, is_question)
+    except Exception as e:  # noqa: BLE001 -- 외부 API(임베딩/검색/LLM/웹검색) 호출이
+        # 일시적으로 실패해도 재생 스크립트 전체가 죽으면 안 되므로 여기서 막는다.
+        log_failed_ingestion(
+            origin_ref=state.get("origin_ref", "unknown"),
+            error_type=type(e).__name__,
+            error_message=str(e),
+        )
+        if is_question:
+            return {
+                "tier2_result": "일시적인 오류로 지금은 답변을 만들지 못했어요. "
+                "잠시 후 다시 물어봐 주세요.",
+                "tier2_sources": "오류로 힌트 생성 실패",
+            }
+        return {"tier2_result": None, "tier2_sources": "오류로 힌트 생성 실패"}
+
+
+def _tier2_deep_agent_inner(state: NoteMateState, is_question: bool) -> dict:
+    """tier2_deep_agent()의 실제 로직 -- 예외 처리는 바깥 함수가 전담."""
     retriever, bm25 = build_hybrid_retriever(
         course_id=state.get("course_id"), k=5, query_embedding=state.get("embedding")
     )
@@ -318,7 +350,7 @@ def tier2_deep_agent(state: NoteMateState) -> dict:
     # 꺼짐 + is_ask 아님)은 바로 아래 웹검색 분기도 안 타므로(is_ask 전용),
     # 여기서 바로 그 이유를 명시한 정형 문구로 답한다 -- LLM이 옵션을
     # 무시하고 몰래 일반지식으로 답해버리면 안 되므로 LLM 호출 없이 결정론적으로.
-    is_question = bool((state.get("assessment") or {}).get("is_question"))
+    # (is_question은 이제 바깥 tier2_deep_agent()가 계산해서 넘겨준다 -- 2026-10-15)
     if (
         not state.get("allow_general_knowledge", True)
         and not state.get("is_ask")

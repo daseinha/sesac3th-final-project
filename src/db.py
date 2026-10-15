@@ -107,6 +107,18 @@ def search_similar_chunks(
 
     assess_note의 search_top_similarity()는 점수 하나만 필요해서 top-1만 보지만,
     Tier2 딥 에이전트는 실제 근거로 LLM에 넘길 내용 자체가 필요해서 여러 개를 가져온다.
+
+    `is_question IS NOT TRUE`(2026-10-15, 외부 리뷰 Q4 반영): 질문으로 저장된
+    과거 필기 행은 근거로 쓰지 않는다 -- "요즘 환율이 어떻게 돼?"와 "요즘
+    비트코인 시세가 어떻게 돼?"처럼 문장 틀만 같은 서로 다른 질문이 서로의
+    근거가 돼버리는 자기참조 오탐을 구조적으로 막는다. `= FALSE`가 아니라
+    `IS NOT TRUE`를 쓰는 이유: 업로드 자료(source='base'/'stt_reference')는
+    판단 자체를 안 거쳐서(embed_and_store 경로) is_question이 항상 NULL인데,
+    `= FALSE`로 쓰면 NULL 비교가 전부 거짓이 되어 강의자료가 통째로 걸러져
+    버린다(외부 리뷰가 지적한 함정, 실제로 맞는 내용). search_top_similarity()
+    (라우팅 확신도 계산용)에는 이 필터를 일부러 적용하지 않는다 -- 적용하면
+    라우팅 자체가 바뀌어서 3차 대비 4차 비교에 "근거 필터링"과 "라우팅 로직
+    변경"이 뒤섞이게 된다(힌트 출처 표시 전용 경로에만 영향을 한정).
     """
     pool = get_pool()
     course_filter = "AND course_id = %(course_id)s" if course_id else ""
@@ -115,6 +127,7 @@ def search_similar_chunks(
                1 - (embedding <=> %(embedding)s::vector) AS similarity
         FROM note_chunks
         WHERE embedding IS NOT NULL
+          AND is_question IS NOT TRUE
         {course_filter}
         {_ACTIVE_SESSION_FILTER}
         ORDER BY embedding <=> %(embedding)s::vector
@@ -148,6 +161,12 @@ def fetch_corpus_for_bm25(course_id: str | None) -> list[dict]:
     코퍼스에서 제외한다(벡터 쪽은 그 행의 embedding이 NULL이라 이미
     `search_similar_chunks`에서 자동으로 빠짐, BM25는 embedding을 안 봐서
     따로 걸러줘야 함).
+
+    `is_question IS NOT TRUE`(2026-10-15): search_similar_chunks()와 같은
+    이유(자기참조 오탐 방지) -- BM25 코퍼스에도 질문 행이 남아있으면 벡터
+    쪽만 걸러봐야 소용없다(_filter_relevant_docs가 벡터+BM25 교차 인정이라
+    한쪽이라도 질문 행을 인정하면 뚫림). `= FALSE`가 아니라 `IS NOT TRUE`를
+    쓰는 이유도 동일(NULL인 업로드 자료를 제외하면 안 됨).
     """
     pool = get_pool()
     course_and = "AND course_id = %(course_id)s" if course_id else ""
@@ -155,6 +174,7 @@ def fetch_corpus_for_bm25(course_id: str | None) -> list[dict]:
         SELECT content, source, origin_ref
         FROM note_chunks
         WHERE content != ''
+          AND is_question IS NOT TRUE
         {_ACTIVE_SESSION_FILTER}
         {course_and}
         ORDER BY id;
