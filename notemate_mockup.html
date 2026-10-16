@@ -1507,7 +1507,14 @@
   // 후 Enter), 옛 판단 결과는 더 이상 유효하지 않다 -- 옛 마커 쌍을 지우고
   // 새 결과로 교체한다. 안 그러면 같은 줄에 마커가 계속 쌓임(2026-10-02 실측).
   function removeMarkerPairForNode(node) {
-    const idx = markerPairs.findIndex((p) => p.noteMarker.parentElement === node);
+    // parentElement(직계 자식)가 아니라 contains()로 찾는다(2026-10-16,
+    // 실사용 중 발견) -- 세션 내 백스페이스 병합으로 두 줄의 텍스트가 합쳐질
+    // 때, 흡수하는 줄(node)에 원래 붙어있던 마커 버튼이 합쳐지는 과정에서
+    // 자식 서열이 뒤섞여(텍스트-마커-텍스트처럼) 위치가 바뀔 수 있음 --
+    // 여전히 node의 자손인 건 맞지만 "직계 자식"이 아니게 될 수 있어서
+    // parentElement 비교가 깨지고, 그 결과 재평가 후 store_only로 바뀌어도
+    // 옛 마커가 안 지워지고 화면에 "먹통"으로 계속 남아있었음(실측 확인됨).
+    const idx = markerPairs.findIndex((p) => node.contains(p.noteMarker));
     if (idx === -1) return;
     const { noteMarker, agentMarker, variant, isToday } = markerPairs[idx];
     if (openMarker === noteMarker || openMarker === agentMarker) closeHintPopover();
@@ -1568,16 +1575,34 @@
       // RAG는 지식 로그로서 계속 쌓인다는 사용자 방침. 저장된 적 없는
       // 빈 줄(client_line_id 없음)은 지울 게 없으니 그냥 끝낸다.
       if (node.dataset.lineId) {
+        const deletedLineId = node.dataset.lineId;
         removeMarkerPairForNode(node);
-        if (typingNode === node) typingNode = null;
-        node.remove();
+        // 이 세션의 마지막 남은 줄이면 <p> 자체를 DOM에서 없애지 않는다
+        // (2026-10-16, 실사용 중 발견) -- 세션 안의 모든 줄이 지워지면 그
+        // 구간에 <p>가 하나도 안 남아서, 클릭해도 걸릴 요소가 없어 커서가
+        // 전혀 안 생기는 "유령 세션"이 됨(focusNewLineAtEnd()는 문서 맨 끝
+        // 에서만 새 줄을 만들어주지, 문서 중간의 빈 구간에서는 동작 안 함).
+        // 대신 빈 placeholder로 남겨서 항상 클릭 가능하게 유지 -- 다음에
+        // 뭔가 입력하면 새 client_line_id가 발급되어 "새 줄"로 취급된다.
+        const sid = node.dataset.sessionId;
+        const siblingCount = sid
+          ? noteBody.querySelectorAll(`p[data-session-id="${CSS.escape(sid)}"]`).length
+          : 2; // sessionId가 없는 드문 경우는 안전하게 "유일한 줄 아님"으로 간주해 기존처럼 제거
+        if (siblingCount <= 1) {
+          node.innerHTML = '<br>';
+          delete node.dataset.lineId;
+          node.dataset.lastSubmittedText = '';
+        } else {
+          if (typingNode === node) typingNode = null;
+          node.remove();
+        }
         try {
           await fetch('/api/ingest_note', {
             method: 'POST',
             keepalive: true,
             body: new URLSearchParams({
               content: '', course_id: COURSE_ID, session_id: SESSION_ID,
-              client_line_id: node.dataset.lineId,
+              client_line_id: deletedLineId,
             }),
           });
         } catch (e) {
@@ -1641,7 +1666,7 @@
     // (isTest는 제외 -- 테스트 모드는 일부러 같은 내용을 재입력해 비교하는
     // 용도로 쓰일 수 있어서 항상 실제로 다시 돌려야 함).
     if (!isTest && node.dataset.hintSnapshotText === text
-        && !markerPairs.some((p) => p.noteMarker.parentElement === node)) {
+        && !markerPairs.some((p) => node.contains(p.noteMarker))) {
       const { agentMarker } = addMarkerPair(
         node, node.dataset.hintSnapshotResult, 'hint',
         node.dataset.hintSnapshotOriginRef || null, node.dataset.hintSnapshotSources || null
@@ -1675,6 +1700,14 @@
     const isNewLine = !node.dataset.lineId; // 수정(기존 줄 재제출)인지 구분 -- 아래 renderedCount 참고
     if (!node.dataset.lineId) node.dataset.lineId = crypto.randomUUID();
 
+    // 2026-10-16: 과거 세션으로 귀속시키는 시도(session_id를 node.dataset.sessionId로
+    // 보내는 방식)를 했다가 되돌림 -- 디바이더 재구성 로직이 "이 session_id를
+    // 전에 어디서 봤는지" 기억을 못 해서, 시간순 스캔 중 한참 뒤(오늘)에
+    // 같은 session_id가 다시 나타나면 오늘 날짜의 가짜 "N번째 필기" 구분선을
+    // 만들어버리는 문제 실측 확인(+ client_line_id가 없는 재생 데이터를 고치면
+    // 원본을 안 덮어쓰고 매번 새 독립된 줄이 생기는 기존 한계와 겹쳐 더 혼란).
+    // [[deferred-historical-note-insertion]]은 "제대로 된 버전" 착수 전까지
+    // 다시 글자색 표시만 하는 원래 방식으로 복귀.
     const body = new URLSearchParams({
       content: text, course_id: COURSE_ID, session_id: SESSION_ID,
       client_line_id: node.dataset.lineId,
@@ -1711,6 +1744,12 @@
       // (2026-10-09, 외부 리뷰 보강 아이디어).
       const res = await fetch('/api/ingest_note', { method: 'POST', body, keepalive: true });
       const result = await res.json();
+      // 블러/포커스이동 자동저장(syncNodeIfChanged)이 "바뀐 게 있는지" 판단할
+      // 기준점 -- 성공적으로 서버에 반영된 시점의 텍스트를 저장해둔다
+      // (2026-10-16, [[deferred-blur-triggered-autosave]]). isTest 포함 항상
+      // 갱신 -- node.dataset.lineId와 같은 패턴(테스트 모드에서도 같은 줄을
+      // 또 고치면 "바뀐 것"으로 정확히 인식되어야 하므로).
+      node.dataset.lastSubmittedText = text;
       if (!isTest) {
         lastSavedAt = new Date();
         node.dataset.time = formatClock();
@@ -1773,15 +1812,34 @@
 
     e.preventDefault();
 
+    // 커서 위치에서 줄을 둘로 나눈다(2026-10-16, 실사용 중 발견 -- 기존엔
+    // 커서 위치와 무관하게 항상 "지금 줄 전체 제출 + 그 뒤 빈 줄 추가"만
+    // 했음, 줄 끝에서 Enter 치는 걸 전제로 한 설계라 병합으로 길어진 줄
+    // 중간에서 나누고 싶을 때 안 먹혔음). Range.extractContents()로 커서
+    // "이후" 내용만 들어내 새 줄로 옮기고, 커서 "이전" 내용은 원래 줄에
+    // 그대로 남겨 재평가(새 힌트 생성)한다.
+    const splitRange = sel.getRangeAt(0).cloneRange();
+    removeMarkerPairForNode(node); // 내용이 바뀌므로 기존 마커는 미리 정리 -- 재평가 후 새로 붙음
+    let afterContent = null;
+    if (node.lastChild) {
+      splitRange.setEndAfter(node.lastChild);
+      afterContent = splitRange.extractContents();
+    }
+    if (!node.hasChildNodes() || node.textContent === '') node.innerHTML = '<br>'; // 커서가 맨 앞이면 원래 줄이 빈 줄로 남음
+
     let insertAfter = node;
     while (insertAfter.nextElementSibling && insertAfter.nextElementSibling.contentEditable === 'false') {
       insertAfter = insertAfter.nextElementSibling;
     }
     const newP = document.createElement('p');
     newP.style.margin = '0 0 1.4em';
-    newP.innerHTML = '<br>';
     newP.dataset.sessionId = SESSION_ID;
     newP.dataset.isToday = '1'; // 방금 입력하는 줄이라 항상 "오늘"
+    if (afterContent && afterContent.textContent.trim() !== '') {
+      newP.appendChild(afterContent);
+    } else {
+      newP.innerHTML = '<br>';
+    }
     insertAfter.insertAdjacentElement('afterend', newP);
 
     const range = document.createRange();
@@ -1802,6 +1860,64 @@
     newP.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertParagraph' }));
 
     submitNote(node);
+  });
+
+  // 줄 맨 앞에서 Backspace (2026-10-16, 실사용 중 발견 + 사용자 설계 확정).
+  // 같은 세션 안에서 윗줄과 병합되는 건 정상 동작(의도된 기능) -- 다만
+  // 병합으로 사라지는 윗줄(client_line_id가 있던 그 줄)이 삭제됐다는 사실이
+  // 서버에 전혀 반영되지 않는 게 문제였음(네이티브 DOM 조작이라 블러/Enter
+  // 트리거를 안 거침 -- 방치하면 다음 새로고침 때 그 줄의 구버전이 고스트처럼
+  // 다시 나타남). **단, 세션/날짜 디바이더(contentEditable=false "편집 불가
+  // 섬")는 백스페이스로 절대 못 넘어가야 함** -- 디바이더는 휴지통 버튼으로만
+  // 삭제되는 게 원칙이고, 실측으로도 섬 경계에서 병합을 시도하면 디바이더
+  // 자체가 통째로 삭제되는 위험한 네이티브 동작이 확인됐음.
+  noteBody.addEventListener('keydown', (e) => {
+    if (e.key !== 'Backspace' || e.isComposing) return;
+    const sel = window.getSelection();
+    if (!sel.rangeCount || !sel.isCollapsed) return; // 범위 선택 중이면 기본 동작(선택 영역 삭제)에 맡김
+    let node = sel.anchorNode;
+    while (node && node !== noteBody && node.nodeName !== 'P') node = node.parentNode;
+    if (!node || node.nodeName !== 'P') return;
+    const range = sel.getRangeAt(0);
+    const preRange = document.createRange();
+    preRange.selectNodeContents(node);
+    preRange.setEnd(range.startContainer, range.startOffset);
+    if (preRange.toString().length !== 0) return; // 줄 맨 앞이 아니면 기본 동작(문자 삭제) 그대로
+
+    const prevEl = node.previousElementSibling;
+    if (!prevEl || prevEl.contentEditable === 'false') {
+      // 바로 위가 디바이더(세션/날짜 구분선) 또는 더 이상 위가 없음(문서
+      // 맨 처음) -- 병합 자체를 차단. 세션 경계는 휴지통 버튼으로만 넘나든다.
+      e.preventDefault();
+      return;
+    }
+    // 바로 위가 같은 세션의 일반 필기 줄 -- 병합을 그대로 허용(네이티브
+    // 동작에 맡김, preventDefault 안 함). 다만 이 병합으로 지금 이 줄(node)이
+    // DOM에서 사라질 것이므로, 그 직후(네이티브 병합이 끝나면 뜨는 input
+    // 이벤트 시점)에 사라졌는지 확인해서 삭제로 서버에 반영한다.
+    //
+    // (2026-10-16 -- 커서를 접합 지점에 정확히 두는 보정을 한 번 추가했다가
+    // 철회함: 그 보정이 계산한 위치가 하필 마커 버튼(편집불가 섬) 바로
+    // 옆에 걸리면 브라우저가 그 버튼을 "선택된 것"처럼 표시하며 클릭이
+    // 안 먹히는 새 버그를 만들어냄(실측). 캐럿이 병합 후 어디 있는지는
+    // 완벽하지 않아도 기능상 문제는 없어서(클릭 한 번으로 재조정 가능),
+    // 더 심각한 부작용을 피하는 쪽을 택해 네이티브 동작 그대로 둠.)
+    if (node.dataset.lineId) {
+      const vanishing = node;
+      noteBody.addEventListener('input', function checkMerged() {
+        if (!vanishing.isConnected) {
+          // replaceChildren()으로 내용을 비우기 "전에" 먼저 마커를 정리해야
+          // 함 -- 순서가 바뀌면(비우고 나서 찾으면) 마커 버튼도 같이
+          // 지워져버려서 removeMarkerPairForNode의 매칭 증거 자체가 사라져
+          // markerPairs 배열에 유령 항목이 남고, 에이전트단 마커(hintTrack
+          // 소속이라 vanishing.contains()로도 못 잡음)가 화면에 계속
+          // 남아있는 버그로 실측됨.
+          removeMarkerPairForNode(vanishing);
+          vanishing.replaceChildren(); // 혹시 텍스트가 안 옮겨가고 남아있어도 강제로 비워 삭제 경로를 타게 함
+          submitNote(vanishing);
+        }
+      }, { once: true });
+    }
   });
 
   // 과거 세션/날짜 블록으로 스크롤해서 그 자리에 입력한 경우를 표시하기 위한
@@ -1827,10 +1943,27 @@
   // 보강.
   let typingNode = null;
 
+  // 블러/포커스이동 자동저장(2026-10-16, [[deferred-blur-triggered-autosave]]) --
+  // 지금까진 Enter(또는 "필기 종료")를 눌러야만 과거 줄의 수정/삭제가 서버에
+  // 반영됐음(사용자 지적: "다른 줄 클릭이나 스크롤로 포커스가 벗어나도 수정/
+  // 삭제가 똑같이 반영돼야 한다"). node.dataset.lastSubmittedText(submitNote
+  // 성공 시점 / 복원 시점에 기록해둔 "서버와 동기화된 마지막 텍스트")와 지금
+  // 내용을 비교해서, 바뀐 게 없으면 호출 자체를 생략한다 -- 그냥 클릭만 했다가
+  // 다른 데로 가는 흔한 경우에 매번 LLM 파이프라인을 낭비하면 안 되므로.
+  async function syncNodeIfChanged(node) {
+    if (!node || node.nodeName !== 'P' || node.contentEditable === 'false') return;
+    const text = getNodeTextPreservingBreaks(node);
+    const last = node.dataset.lastSubmittedText ?? '';
+    if (text === last) return;
+    await submitNote(node);
+  }
+
   function clearTypingHighlight() {
     if (typingNode) {
+      const node = typingNode;
       typingNode.classList.remove('typing-active');
       typingNode = null;
+      syncNodeIfChanged(node);
     }
   }
 
@@ -1877,6 +2010,9 @@
   noteScroll.addEventListener('mousedown', (e) => {
     if (e.target === noteScroll || e.target === noteBody) {
       e.preventDefault();
+      // 빈 공간 클릭도 "지금 쓰던 줄을 벗어나는" 이벤트라, 다른 줄 클릭과
+      // 동일하게 먼저 동기화한다(2026-10-16, 블러 자동저장과 같은 결).
+      clearTypingHighlight();
       focusNewLineAtEnd();
     }
   });
@@ -2529,6 +2665,9 @@
     // 또 고쳐서 재제출해도(submitNote) 같은 줄로 계속 인식되어야, 새로고침을
     // 여러 번 거쳐도 중복 없이 "최신 버전 하나"만 남는다(2026-10-02).
     if (n.client_line_id) p.dataset.lineId = n.client_line_id;
+    // 블러 자동저장의 변경감지 기준점(위 submitNote 참고) -- 복원 직후엔
+    // 서버 내용과 100% 동기화된 상태이므로 그대로 기준점으로 삼는다.
+    p.dataset.lastSubmittedText = n.content;
     p.dataset.time = formatClock(n.created_at);
     // 세션 삭제 버튼이 DOM에서 바로 이 줄을 찾아 지울 수 있게 session_id를
     // 같이 달아둔다(2026-10-08, deleteSessionFromDom 참고).
@@ -2573,6 +2712,7 @@
     p.style.margin = '0 0 1.4em';
     p.textContent = n.content;
     if (n.client_line_id) p.dataset.lineId = n.client_line_id;
+    p.dataset.lastSubmittedText = n.content;
     p.dataset.time = formatClock(n.created_at);
     if (n.session_id) p.dataset.sessionId = n.session_id;
     if (isToday(n.created_at)) p.dataset.isToday = '1';

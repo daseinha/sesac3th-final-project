@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from src.usage import record_usage
 
 _LLM_MODEL = os.environ.get("LLM_MODEL", "gpt-4.1-mini")
+_LLM_TEMPERATURE = os.environ.get("LLM_TEMPERATURE", "0")
 _EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
 
 _chat_model: BaseChatModel | None = None
@@ -22,10 +23,21 @@ _embeddings_model: OpenAIEmbeddings | None = None
 
 
 def get_chat_model() -> BaseChatModel:
-    """구조화 출력(판단 노드)에 쓰는 채팅 모델. 프로세스당 한 번만 생성해 재사용."""
+    """구조화 출력(판단 노드)에 쓰는 채팅 모델. 프로세스당 한 번만 생성해 재사용.
+
+    2026-10-16: temperature=0을 하드코딩했었는데, reasoning 모델(o1/o3/gpt-5
+    non-chat/gpt-6/luna 계열)은 temperature=0을 거부함을 실측 확인(gpt-6-luna로
+    직접 호출 테스트, 400 에러). 모델 이름을 코드에서 패턴매칭하는 대신(provider
+    하드코딩 금지 원칙과 같은 결), LLM_MODEL처럼 .env의 LLM_TEMPERATURE로
+    옮김 -- 빈 문자열이면 파라미터 자체를 안 보내서 그 모델의 기본값(보통 1)을
+    쓰게 둔다.
+    """
     global _chat_model
     if _chat_model is None:
-        _chat_model = init_chat_model(_LLM_MODEL, temperature=0)
+        kwargs = {}
+        if _LLM_TEMPERATURE != "":
+            kwargs["temperature"] = float(_LLM_TEMPERATURE)
+        _chat_model = init_chat_model(_LLM_MODEL, **kwargs)
     return _chat_model
 
 
