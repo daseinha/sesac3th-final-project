@@ -10,7 +10,12 @@ from datetime import datetime, timezone
 import requests
 from pydantic import BaseModel, Field
 
-from src.db import insert_note_chunk, log_failed_ingestion, search_top_similarity
+from src.db import (
+    insert_note_chunk,
+    log_failed_ingestion,
+    search_similar_chunks,
+    search_top_similarity,
+)
 from src.llm import embed_text, invoke_chat, invoke_structured
 from src.retrieval import build_hybrid_retriever
 from src.routers import NEGATIVE_FEEDBACK_SUPPRESS_THRESHOLD, compute_routing_decision
@@ -82,6 +87,20 @@ _ASSESSMENT_SYSTEM_PROMPT = (
 )
 
 
+def _resolve_search_course_ids(state: NoteMateState) -> list[str] | None:
+    """노트 묶음(RAG 공유그룹, 2026-10-17 야간) -- 검색 범위를 결정한다.
+
+    `search_course_ids`가 있으면 그대로 쓰고(묶음, 항상 자기 자신 포함해서
+    프론트가 계산해 보냄), 없으면 `course_id` 하나짜리 리스트로 대체해서
+    기존 동작(단일 노트, 묶음 없음)과 완전히 동일하게 만든다.
+    """
+    search_ids = state.get("search_course_ids")
+    if search_ids:
+        return search_ids
+    course_id = state.get("course_id")
+    return [course_id] if course_id else None
+
+
 def assess_note(state: NoteMateState) -> dict:
     """정리 노드: 신호 A(top_score) + 신호 B(assessment) 계산.
 
@@ -99,7 +118,7 @@ def assess_note(state: NoteMateState) -> dict:
 
     embedding = embed_text(content, purpose="assess_note_embedding")
 
-    top_match = search_top_similarity(embedding, course_id=state.get("course_id"))
+    top_match = search_top_similarity(embedding, course_id=_resolve_search_course_ids(state))
     top_score = top_match["similarity"] if top_match else 0.0
     # 힌트 피드백 반영 Phase 2(✓ 억제, 2026-10-08): 가장 비슷한 과거 필기가
     # "이미 알고 있음(✓)" 피드백을 받은 적 있으면 그 정보를 같이 들고 간다 --
@@ -319,8 +338,9 @@ def tier2_deep_agent(state: NoteMateState) -> dict:
 
 def _tier2_deep_agent_inner(state: NoteMateState, is_question: bool) -> dict:
     """tier2_deep_agent()의 실제 로직 -- 예외 처리는 바깥 함수가 전담."""
+    search_course_ids = _resolve_search_course_ids(state)
     retriever, bm25 = build_hybrid_retriever(
-        course_id=state.get("course_id"), k=5, query_embedding=state.get("embedding")
+        course_id=search_course_ids, k=5, query_embedding=state.get("embedding")
     )
     similar_docs = retriever.invoke(state["content"]) if retriever else []
     # BM25를 독립적으로 한 번 더 불러서(인덱스는 위에서 이미 만들어진 걸
@@ -330,12 +350,23 @@ def _tier2_deep_agent_inner(state: NoteMateState, is_question: bool) -> dict:
     bm25_docs = bm25.invoke(state["content"]) if bm25 else []
     bm25_origin_refs = {d.metadata.get("origin_ref") for d in bm25_docs}
 
-    # 힌트 피드백 +/- 반영(2026-10-17). 검색된 비슷한 과거 필기 중 +/- 피드백이
-    # 달린 게 있는지 확인 -- routers.NEGATIVE_FEEDBACK_SUPPRESS_THRESHOLD 주석
-    # 참고. `-` 개수가 임계치를 넘으면(= 몇 번 다르게 시도해도 계속 안 맞았다)
-    # 질문이 아닌 한 조용히 넘어간다.
-    negative_feedback_docs = [d for d in similar_docs if d.metadata.get("feedback_value") == "-"]
-    positive_feedback_docs = [d for d in similar_docs if d.metadata.get("feedback_value") == "+"]
+    # 힌트 피드백 +/- 반영(2026-10-17, 2026-10-17 버그 수정: 질문 제외 필터와
+    # 분리). 처음엔 위에서 이미 구한 similar_docs(근거 표시용, is_question
+    # 제외 필터 적용됨)에서 그대로 뽑았는데, 실사용 중 발견: "바로 물어보기"/
+    # 명시적 질문 줄은 전부 is_question=True라서 그 줄에 준 피드백이 이
+    # 필터에 걸려 영원히 안 보임 -- 같은 질문에 `-`를 반복해서 줘도 전혀
+    # 반영 안 되는 버그로 실측 재현됨(히말라야 산맥 질문 3연속 테스트).
+    # 그래서 피드백 확인은 질문 제외 없이 별도로 검색한다(근거 표시 목적의
+    # similar_docs/bm25_docs는 그대로 둠 -- 그쪽 필터는 여전히 유효한 목적이 있음).
+    feedback_candidates = (
+        search_similar_chunks(
+            state.get("embedding"), search_course_ids, k=5, exclude_questions=False
+        )
+        if state.get("embedding")
+        else []
+    )
+    negative_feedback_docs = [d for d in feedback_candidates if d.get("feedback_value") == "-"]
+    positive_feedback_docs = [d for d in feedback_candidates if d.get("feedback_value") == "+"]
     if len(negative_feedback_docs) >= NEGATIVE_FEEDBACK_SUPPRESS_THRESHOLD and not is_question:
         return {
             "tier2_result": None,
@@ -429,15 +460,28 @@ def _tier2_deep_agent_inner(state: NoteMateState, is_question: bool) -> dict:
     # 급한 신호).
     feedback_instruction = ""
     if negative_feedback_docs:
-        past_attempt = negative_feedback_docs[0].metadata.get("tier2_result") or "(내용 없음)"
-        feedback_instruction = (
-            f"\n\n참고: 비슷한 내용에 대해 이전에 다음과 같이 설명했으나 도움이 "
-            f'안 됐다는 피드백이 있었습니다: "{past_attempt}" -- 이번에는 다른 '
-            "방식(다른 비유, 더 구체적인 예시, 더 짧거나 더 자세하게 등)으로 "
-            "설명해보세요."
-        )
+        past_attempt = negative_feedback_docs[0].get("tier2_result") or "(내용 없음)"
+        if is_question or state.get("is_ask"):
+            # 질문/바로 물어보기에 대한 `-`는 "답하지 말라"가 아니라 "제대로
+            # 답하라"는 뜻(2026-10-17, 사용자 지적) -- 단순 문체 변경이 아니라
+            # 정확성/점검 쪽에 무게를 둔 지시로 구분. 억제 분기(위)가 이미
+            # `not is_question`일 때만 동작하도록 가드돼 있어서, 질문은 여기
+            # 오는 경우에도 완전 침묵은 안 되고 항상 답이 나간다.
+            feedback_instruction = (
+                f"\n\n참고: 비슷한 질문에 대해 이전에 다음과 같이 답했으나 도움이 "
+                f'안 됐다는 피드백이 있었습니다: "{past_attempt}" -- 이번에는 내용을 '
+                "다시 한 번 점검해서, 빠지거나 부정확한 부분이 없는지 확인하고 "
+                "더 정확하고 구체적으로 답변하세요(단순히 표현만 바꾸지 말 것)."
+            )
+        else:
+            feedback_instruction = (
+                f"\n\n참고: 비슷한 내용에 대해 이전에 다음과 같이 설명했으나 도움이 "
+                f'안 됐다는 피드백이 있었습니다: "{past_attempt}" -- 이번에는 다른 '
+                "방식(다른 비유, 더 구체적인 예시, 더 짧거나 더 자세하게 등)으로 "
+                "설명해보세요."
+            )
     elif positive_feedback_docs:
-        past_attempt = positive_feedback_docs[0].metadata.get("tier2_result") or "(내용 없음)"
+        past_attempt = positive_feedback_docs[0].get("tier2_result") or "(내용 없음)"
         feedback_instruction = (
             f"\n\n참고: 비슷한 내용에 대해 이전에 다음과 같이 설명했더니 도움이 "
             f'됐다는 피드백이 있었습니다: "{past_attempt}" -- 이번에도 비슷한 '

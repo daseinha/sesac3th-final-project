@@ -286,7 +286,7 @@
           <div id="course-list"></div>
           <div style="border-top: 1px solid var(--color-border); margin: 6px 0 4px;"></div>
           <div style="display: flex; gap: 6px; padding: 4px;">
-            <input id="course-new-name" type="text" placeholder="새 과목 이름" maxlength="40" style="flex: 1; min-width: 0; border: 1px solid var(--color-border-input); border-radius: 6px; padding: 6px 8px; font-size: 13px; font-family: inherit;">
+            <input id="course-new-name" type="text" placeholder="새 노트 이름" maxlength="40" style="flex: 1; min-width: 0; border: 1px solid var(--color-border-input); border-radius: 6px; padding: 6px 8px; font-size: 13px; font-family: inherit;">
             <button id="course-add-btn" type="button" style="border: 1px solid var(--color-border-input); background: var(--color-surface); border-radius: 6px; padding: 6px 10px; font-size: 13px; cursor: pointer; color: var(--color-ink);">추가</button>
           </div>
         </div>
@@ -295,9 +295,24 @@
     <div style="display: flex; align-items: center; gap: 14px;">
       <div style="display: flex; align-items: center; gap: 8px;">
         <!-- 선택/업로드된 파일 상태 필드 -- 비어있을 땐 "선택된 파일 없음"(회색), 선택되면 파일명+상태 칩으로 바뀜 -->
-        <div id="file-status" style="display: flex; align-items: center; gap: 6px; background: var(--color-surface-subtle); border: 1px solid var(--color-border); border-radius: 6px; padding: 6px 10px; font-size: 12.5px; max-width: 220px;">
+        <div id="file-status" style="position: relative; display: flex; align-items: center; gap: 6px; background: var(--color-surface-subtle); border: 1px solid var(--color-border); border-radius: 6px; padding: 6px 10px; font-size: 12.5px; max-width: 220px;">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--color-icon-disabled)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
           <span id="file-status-text" style="color: var(--color-icon-disabled); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">선택된 파일 없음</span>
+          <!-- 재생모드 업로드(2026-10-17, [[deferred-visual-replay-upload-feature]]) --
+               상시 노출 체크박스였다가, 사용자 지적으로 설계 변경: 평소엔 전혀
+               안 보이다가 파일을 "선택한 직후" 딱 그 순간에만 선택지 2개(즉시저장/
+               재생모드)를 보여준다. 처음엔 상단바 같은 줄에 인라인(display:flex
+               토글)으로 넣었다가, 2026-10-17 실측으로 발견: 그러면 선택지가 뜨는
+               순간 상단바 한 줄에 버튼이 갑자기 더 끼어들면서 다른 메뉴들이
+               밀리고 줄바꿈까지 일어나 "버튼들이 왔다갔다 채워졌다 비워졌다"는
+               정신없는 레이아웃 흔들림이 생김(사용자 제보, 스크린샷으로 확인) --
+               "분류명 선택" 드롭다운과 같은 패턴(절대위치로 아래에 떨어지는 팝업)
+               으로 교체해서 줄 자체의 폭/배치는 전혀 안 바뀌게 함. -->
+          <div id="upload-mode-choice" style="display: none; position: absolute; top: calc(100% + 6px); left: 0; align-items: center; gap: 6px; font-size: 12.5px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 8px; padding: 8px 10px; box-shadow: var(--shadow-dropdown); white-space: nowrap; z-index: 40;">
+            <span style="color: var(--color-text-muted);">어떻게 처리할까요?</span>
+            <button id="upload-mode-instant-btn" type="button" style="border: 1px solid var(--color-border-input); background: var(--color-surface); border-radius: 6px; padding: 5px 10px; font-size: 12.5px; cursor: pointer; color: var(--color-ink);">즉시저장</button>
+            <button id="upload-mode-replay-btn" type="button" style="border: 1px solid var(--color-border-input); background: var(--color-surface); border-radius: 6px; padding: 5px 10px; font-size: 12.5px; cursor: pointer; color: var(--color-ink);" title="화면에 한 조각씩 재생하며 입력/힌트생성 과정을 보여줍니다.">재생모드로 보기</button>
+          </div>
         </div>
         <button id="upload-btn" style="display: flex; align-items: center; gap: 7px; background: var(--color-surface); border: 1px solid var(--color-border-input); border-radius: 8px; padding: 7px 14px; font-size: 13px; font-weight: 500; color: var(--color-ink); cursor: pointer; flex-shrink: 0;">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--color-ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -324,16 +339,6 @@
           </div>
         </div>
         <input id="file-input" type="file" style="display: none;">
-        <!-- 재생모드 업로드(2026-10-17, [[deferred-visual-replay-upload-feature]]) --
-             상시 노출 체크박스였다가, 사용자 지적으로 설계 변경: 평소엔 전혀
-             안 보이다가 파일을 "선택한 직후" 딱 그 순간에만 선택지 2개(즉시저장/
-             재생모드)를 보여준다 -- 업로드라는 행위와 분리되지 않으면서도
-             화면을 상시 차지하지 않음. 파일 형식 무관하게 동일 적용. -->
-        <div id="upload-mode-choice" style="display: none; align-items: center; gap: 6px; font-size: 12.5px;">
-          <span style="color: var(--color-text-muted);">어떻게 처리할까요?</span>
-          <button id="upload-mode-instant-btn" type="button" style="border: 1px solid var(--color-border-input); background: var(--color-surface); border-radius: 6px; padding: 5px 10px; font-size: 12.5px; cursor: pointer; color: var(--color-ink);">즉시저장</button>
-          <button id="upload-mode-replay-btn" type="button" style="border: 1px solid var(--color-border-input); background: var(--color-surface); border-radius: 6px; padding: 5px 10px; font-size: 12.5px; cursor: pointer; color: var(--color-ink);" title="화면에 한 조각씩 재생하며 입력/힌트생성 과정을 보여줍니다.">재생모드로 보기</button>
-        </div>
       </div>
       <!-- 2026-10-08: 전엔 "세션 진행 중" 고정 텍스트(id도 없고 JS 연결도
            전혀 없는 순수 장식)였음 -- 사용자 지적으로 실제 상태 반영하도록
@@ -353,7 +358,17 @@
            세션을 나눌 수 있어야 한다는 요청). -->
       <button id="new-session-btn" title="지금부터 새 세션으로 구분합니다" style="display: flex; align-items: center; gap: 6px; background: var(--color-surface); border: 1px solid var(--color-border-input); border-radius: 8px; padding: 7px 14px; font-size: 13px; font-weight: 500; color: var(--color-ink); cursor: pointer; flex-shrink: 0;">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--color-ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        새 필기 시작
+        새 필기
+      </button>
+      <!-- 내보내기(2026-10-18) -- 전체/기간/세션 범위로 골라 문서(html,
+           인쇄용)/텍스트(txt, md) 파일로 받는다. 날짜범위는 created_at 기준이라
+           재생 테스트로 대량 백필된 과거 데이터엔 못 쓰므로(실제 역사적 날짜가
+           created_at에 안 남음), 그 보완으로 "세션 선택" 모드를 같이 둠.
+           2026-10-18: 업로드 클러스터 바로 뒤라 애매하게 끼어있다는 지적으로
+           "필기 종료" 옆(세션 마무리 동작들과 같은 결)으로 이동. -->
+      <button id="export-btn" style="display: flex; align-items: center; gap: 7px; background: var(--color-surface); border: 1px solid var(--color-border-input); border-radius: 8px; padding: 7px 14px; font-size: 13px; font-weight: 500; color: var(--color-ink); cursor: pointer; flex-shrink: 0;">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--color-ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        내보내기
       </button>
       <!-- 필기 종료 -- 2026-10-08, [[deferred-launch-exit-ux]]. 입력 중이던
            줄 저장 -> 세션 종료 기록 -> 서버 종료 -> 창 닫기까지 한 번에. -->
@@ -361,6 +376,70 @@
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--color-ink)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
         필기 종료
       </button>
+    </div>
+  </div>
+
+  <!-- 내보내기 모달(2026-10-18) -- 평소엔 숨김, #export-btn 클릭 시만 노출.
+       범위(전체/기간/세션)·힌트포함여부·형식(html/txt/md, 다중선택)을 한
+       화면에서 고르고 "내보내기" 한 번으로 선택한 형식 전부를 바로 받는다. -->
+  <div id="export-modal-backdrop" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 500; align-items: center; justify-content: center;">
+    <div id="export-modal" style="background: var(--color-surface); border-radius: 14px; padding: 24px 26px; width: 380px; max-width: 90vw; max-height: 85vh; overflow-y: auto; box-shadow: var(--shadow-dropdown);">
+      <h3 style="margin: 0 0 16px; font-size: 16px; color: var(--color-ink);">필기 내보내기</h3>
+
+      <div style="font-size: 12.5px; font-weight: 600; color: var(--color-text-muted); margin-bottom: 6px;">범위</div>
+      <label style="display: flex; align-items: center; gap: 6px; font-size: 13.5px; color: var(--color-ink); margin-bottom: 6px; cursor: pointer;">
+        <input type="radio" name="export-scope" value="all" checked> 전체
+      </label>
+      <label style="display: flex; align-items: center; gap: 6px; font-size: 13.5px; color: var(--color-ink); margin-bottom: 6px; cursor: pointer;">
+        <input type="radio" name="export-scope" value="range"> 기간 선택
+      </label>
+      <div id="export-range-fields" style="display: none; margin: 4px 0 10px 22px; gap: 8px; align-items: center;">
+        <input id="export-start-date" type="date" style="border: 1px solid var(--color-border-input); border-radius: 6px; padding: 5px 7px; font-size: 13px; font-family: inherit;">
+        <span style="color: var(--color-text-muted); font-size: 12.5px;">~</span>
+        <input id="export-end-date" type="date" style="border: 1px solid var(--color-border-input); border-radius: 6px; padding: 5px 7px; font-size: 13px; font-family: inherit;">
+      </div>
+      <div id="export-range-note" style="display: none; margin: -2px 0 10px 22px; font-size: 11.5px; color: var(--color-text-muted); line-height: 1.5;">
+        작성 시각(실제 DB 저장 시각) 기준입니다 -- 재생 테스트로 한꺼번에
+        들어간 과거 데이터는 원래 날짜가 아니라 그게 실제로 들어간 날짜로
+        걸러집니다. 옛날 특정 날짜 필기를 찾으신다면 "세션 선택"을 써보세요.
+      </div>
+      <label style="display: flex; align-items: center; gap: 6px; font-size: 13.5px; color: var(--color-ink); margin-bottom: 6px; cursor: pointer;">
+        <input type="radio" name="export-scope" value="sessions"> 세션 선택
+      </label>
+      <div id="export-session-fields" style="display: none; margin: 4px 0 10px 22px;">
+        <!-- 맨 위 "전체"(라디오, 범위 자체를 통째로 전체로)와는 다른 결의
+             기능 -- 세션 선택 모드 "안에서" 체크박스 여러 개를 한 번에
+             켜고 끄는 편의 버튼(2026-10-18, 사용자 요청). -->
+        <div style="display: flex; gap: 10px; margin-bottom: 6px;">
+          <button id="export-session-select-all" type="button" style="border: none; background: none; color: var(--color-accent); font-size: 12px; cursor: pointer; padding: 0;">전체선택</button>
+          <button id="export-session-select-none" type="button" style="border: none; background: none; color: var(--color-text-muted); font-size: 12px; cursor: pointer; padding: 0;">전체해제</button>
+        </div>
+        <div id="export-session-list" style="max-height: 160px; overflow-y: auto; border: 1px solid var(--color-border); border-radius: 8px; padding: 6px; font-size: 12.5px;">
+          <div style="color: var(--color-text-muted); padding: 6px;">불러오는 중...</div>
+        </div>
+      </div>
+
+      <div style="border-top: 1px solid var(--color-border); margin: 14px 0;"></div>
+
+      <label style="display: flex; align-items: center; gap: 6px; font-size: 13.5px; color: var(--color-ink); margin-bottom: 14px; cursor: pointer;">
+        <input id="export-include-hints" type="checkbox" checked> 힌트(AI 코멘트) 포함
+      </label>
+
+      <div style="font-size: 12.5px; font-weight: 600; color: var(--color-text-muted); margin-bottom: 6px;">형식 (여러 개 선택 가능)</div>
+      <label style="display: flex; align-items: center; gap: 6px; font-size: 13.5px; color: var(--color-ink); margin-bottom: 6px; cursor: pointer;">
+        <input type="checkbox" name="export-format" value="html" checked> 문서/인쇄용 (HTML, 새 탭으로 열림)
+      </label>
+      <label style="display: flex; align-items: center; gap: 6px; font-size: 13.5px; color: var(--color-ink); margin-bottom: 6px; cursor: pointer;">
+        <input type="checkbox" name="export-format" value="txt"> 텍스트 파일 (.txt)
+      </label>
+      <label style="display: flex; align-items: center; gap: 6px; font-size: 13.5px; color: var(--color-ink); margin-bottom: 16px; cursor: pointer;">
+        <input type="checkbox" name="export-format" value="md"> 마크다운 파일 (.md)
+      </label>
+
+      <div style="display: flex; justify-content: flex-end; gap: 8px;">
+        <button id="export-cancel-btn" type="button" style="border: 1px solid var(--color-border-input); background: var(--color-surface); border-radius: 8px; padding: 7px 14px; font-size: 13px; cursor: pointer; color: var(--color-ink);">취소</button>
+        <button id="export-run-btn" type="button" style="border: none; background: var(--color-accent); border-radius: 8px; padding: 7px 16px; font-size: 13px; font-weight: 600; cursor: pointer; color: #fff;">내보내기</button>
+      </div>
     </div>
   </div>
 
@@ -568,6 +647,20 @@
     document.getElementById('splash-logo').src = document.getElementById('logo-icon').src;
   } catch (e) {}
 
+  // 2026-10-18: 노트 전환은 (제자리 교체의 세부 오류 가능성을 피해) 지금은
+  // 그냥 페이지를 새로고침하는 방식 -- 그래서 전환할 때도 "서비스 시작
+  // 중..."이라는, 마치 앱을 처음 켠 것 같은 문구가 그대로 뜬다. 전환임을
+  // 알 수 있게 스플래시 문구만 바꿔치기 -- switchToCourse()가 reload 직전에
+  // 심어둔 1회성 플래그를 여기서 읽자마자 지운다(다음 "진짜" 새로고침엔
+  // 안 남게).
+  try {
+    if (localStorage.getItem('notemate.switchingNotebook')) {
+      localStorage.removeItem('notemate.switchingNotebook');
+      const splashText = document.getElementById('splash-text');
+      if (splashText) splashText.textContent = 'LY:OL 노트 전환 중...';
+    }
+  } catch (e) {}
+
   // 과목 목록은 이 브라우저(localStorage)에만 저장한다 -- 시연/프로토타입용. 서버 저장은 아직 아님.
   const COURSE_LIST_KEY = 'notemate.courses';
   const COURSE_CURRENT_KEY = 'notemate.currentCourse';
@@ -635,11 +728,29 @@
       label.style.flex = '1';
       row.append(mark, label);
       row.onclick = (ev) => { ev.stopPropagation(); selectCourse(c.id); };
-      // 삭제 버튼: 과목이 하나만 남으면 막는다
+      // 노트 묶음(RAG 공유그룹, 2026-10-17 야간) -- 지금 활성 노트(COURSE_ID)와
+      // 다른 노트를 묶으면, 검색(친숙도/힌트 근거)만 서로 참고하게 된다(쓰기는
+      // 항상 하나의 노트에만 남음). 자기 자신(COURSE_ID)과는 묶을 수 없으니
+      // 그 행에는 안 보여준다.
+      if (c.id !== COURSE_ID) {
+        const link = document.createElement('button');
+        link.type = 'button';
+        const grouped = isGrouped(c.id);
+        link.textContent = '🔗';
+        link.title = grouped
+          ? `지금 노트와 묶여있음(검색 서로 참고) -- 클릭하면 해제`
+          : `지금 노트와 묶기(검색만 서로 참고, 필기는 각자 노트에 저장됨)`;
+        link.setAttribute('aria-label', link.title);
+        link.setAttribute('aria-pressed', String(grouped));
+        link.style.cssText = 'border: none; background: none; font-size: 13px; line-height: 1; cursor: pointer; padding: 0 2px; opacity: ' + (grouped ? '1' : '0.35') + ';';
+        link.onclick = (ev) => { ev.stopPropagation(); toggleGroup(c.id); };
+        row.appendChild(link);
+      }
+      // 삭제 버튼: 노트가 하나만 남으면 막는다
       const del = document.createElement('button');
       del.type = 'button';
       del.textContent = '×';
-      del.title = '과목 삭제';
+      del.title = '노트 삭제';
       del.setAttribute('aria-label', `${c.name} 삭제`);
       del.style.cssText = 'border: none; background: none; color: var(--color-text-muted); font-size: 16px; line-height: 1; cursor: pointer; padding: 0 2px;';
       del.onclick = (ev) => { ev.stopPropagation(); deleteCourse(c.id); };
@@ -647,15 +758,58 @@
       courseListEl.appendChild(row);
     });
   }
+  // 묶음 판정/토글 -- 항상 "지금 활성 노트(COURSE_ID)" 기준(드롭다운에서
+  // 아직 전환 안 하고 훑어보기만 하는 uiSelectedId와는 별개 축).
+  function isGrouped(id) {
+    const active = courses.find((c) => c.id === COURSE_ID);
+    const target = courses.find((c) => c.id === id);
+    return !!(active && target && active.groupId && target.groupId === active.groupId);
+  }
+  function toggleGroup(id) {
+    const active = courses.find((c) => c.id === COURSE_ID);
+    const target = courses.find((c) => c.id === id);
+    if (!active || !target || active.id === target.id) return;
+    if (isGrouped(id)) {
+      target.groupId = null; // 해제 -- 다른 멤버들은 그대로 둔다
+    } else {
+      if (!active.groupId) active.groupId = 'grp_' + Date.now().toString(36);
+      target.groupId = active.groupId;
+    }
+    saveCourseList();
+    renderCourseList();
+  }
+  // 지금 활성 노트가 속한 묶음 전체(자기 자신 포함)의 course_id 목록.
+  // 묶음이 없으면 자기 자신 하나짜리 배열(기존 동작과 동일).
+  function resolveSearchCourseIds() {
+    const active = courses.find((c) => c.id === COURSE_ID);
+    if (!active || !active.groupId) return [COURSE_ID];
+    return courses.filter((c) => c.groupId === active.groupId).map((c) => c.id);
+  }
   function openCourseMenu(open) {
     courseMenu.style.display = open ? 'block' : 'none';
     courseBtn.setAttribute('aria-expanded', String(open));
     if (open) courseNewName.focus();
   }
+  // 2026-10-17 야간: 실제 전환 구현 -- 이전엔 드롭다운 선택이 uiSelectedId(화면
+  // 표시)만 바꾸고 COURSE_ID(실제로 API 호출에 쓰이는 값)는 그대로라 "선택만
+  // 되고 안 바뀌는" 상태였음. SESSION_ID/스크롤위치 등 COURSE_ID를 키로 삼는
+  // 하위 상태가 많아서 제자리 교체보다 페이지를 다시 불러오는 쪽이 안전함
+  // (하드리셋 버튼과 같은 원칙). COURSE_CURRENT_KEY는 바로 이 전환을 위해
+  // 처음부터 읽기 로직만 있던 자리였음(위 부트스트랩 코드 참고).
+  function switchToCourse(id) {
+    if (id === COURSE_ID) { openCourseMenu(false); return; }
+    try {
+      localStorage.setItem(COURSE_CURRENT_KEY, id);
+      // 2026-10-18: 스플래시 문구를 "LY:OL 노트 전환 중..."으로 바꿔치기할
+      // 1회성 신호(위 부트스트랩 코드가 읽자마자 지움).
+      localStorage.setItem('notemate.switchingNotebook', '1');
+    } catch (e) {}
+    location.reload();
+  }
   function selectCourse(id) {
     uiSelectedId = id;
     renderCourseList();
-    openCourseMenu(false);
+    switchToCourse(id);
   }
   function addCourse() {
     const name = courseNewName.value.trim();
@@ -664,16 +818,21 @@
     courses.push({ id, name });
     saveCourseList();
     courseNewName.value = '';
-    uiSelectedId = id;
-    renderCourseList();
-    openCourseMenu(true);
+    switchToCourse(id); // 새 노트를 만들면 바로 그 노트(빈 상태)로 전환
   }
   function deleteCourse(id) {
-    if (courses.length <= 1) return; // 마지막 과목은 남긴다
+    if (courses.length <= 1) return; // 마지막 노트는 남긴다
+    // 세션 삭제(위 deleteSessionInline)와 같은 원칙 -- 되돌릴 목록/복구 UI가
+    // 없는 일방향 동작이라 confirm()으로 한 번 더 확인한다(2026-10-17 야간,
+    // 사용자 요청: "테스트라도 지킬 건 지켜야 한다").
+    const target = courses.find((c) => c.id === id);
+    if (!confirm(`"${target ? target.name : id}" 노트를 목록에서 지울까요? (이미 쓴 필기/업로드 자료는 DB에 그대로 남고, 목록에서만 사라집니다)`)) return;
+    const wasActive = id === COURSE_ID;
     courses.splice(courses.findIndex((c) => c.id === id), 1);
     saveCourseList();
     if (uiSelectedId === id) uiSelectedId = courses[0].id;
     renderCourseList();
+    if (wasActive) switchToCourse(courses[0].id); // 지금 보던 노트를 지웠으면 다른 노트로 전환
   }
   courseBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openCourseMenu(courseMenu.style.display === 'none'); });
   courseBtn.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); courseBtn.click(); } });
@@ -1068,6 +1227,7 @@
     const body = new URLSearchParams({
       content: typingNode.textContent.trim(),
       course_id: COURSE_ID,
+      search_course_ids: resolveSearchCourseIds().join(','),
       session_id: SESSION_ID,
       client_line_id: typingNode.dataset.lineId || crypto.randomUUID(),
     });
@@ -1723,6 +1883,7 @@
     // 다시 글자색 표시만 하는 원래 방식으로 복귀.
     const body = new URLSearchParams({
       content: text, course_id: COURSE_ID, session_id: SESSION_ID,
+      search_course_ids: resolveSearchCourseIds().join(','),
       client_line_id: node.dataset.lineId,
     });
     if (isTest) body.set('dry_run', 'true');
@@ -1972,6 +2133,18 @@
   }
 
   function clearTypingHighlight() {
+    // 창/탭 자체가 OS 포커스를 잃어서 생기는 blur(멀티태스킹으로 다른 프로그램
+    // 전환)는 여기서 거른다(2026-10-17 실측 버그) -- noteBody의 blur 이벤트가
+    // "페이지 안에서 다른 요소를 클릭함"과 "창 자체가 포커스를 잃음" 둘 다에서
+    // 똑같이 발동하는데, 지금까진 둘을 구분 안 해서 "아직 Enter 안 친, 쓰다 만
+    // 줄"이 멀티태스킹만으로 "편집 끝났다"고 오판돼 그 미완성 상태 그대로
+    // 제출/힌트생성 되고, 돌아와서 Enter 치면 방금 막 저장한 것과 거의 같아
+    // 세션중복으로 조용히 store_only 되어버리는 문제가 있었음(사용자가 실사용
+    // 중 직접 재현/제보). document.hasFocus()는 "페이지 안 다른 요소 클릭"일 땐
+    // true(창은 계속 포커스를 가짐), "창 자체가 블러"일 땐 false라서 이걸로
+    // 구분한다 -- 창 블러일 땐 아무것도 안 하고 typingNode를 그대로 둬서, 돌아와
+    // 계속 같은 줄에 입력하면 자연스럽게 이어지게 한다.
+    if (!document.hasFocus()) return;
     if (typingNode) {
       const node = typingNode;
       typingNode.classList.remove('typing-active');
@@ -2206,7 +2379,10 @@
       // 여기서 똑같이 반영한다(2026-10-14, 사용자 요구: "테스트 태그를 켜도
       // 싱크를 맞춰야 한다") -- 이전엔 필기단만 보고 "바로 물어보기"는 테스트
       // 모드와 무관하게 항상 실제로 저장됐음(알려진 틈, deferred-*.md 기록).
-      const body = new URLSearchParams({ content: question, course_id: COURSE_ID, session_id: SESSION_ID, origin_prefix: 'ask' });
+      const body = new URLSearchParams({
+        content: question, course_id: COURSE_ID, session_id: SESSION_ID, origin_prefix: 'ask',
+        search_course_ids: resolveSearchCourseIds().join(','),
+      });
       if (!generalKnowledgeToggle.checked) body.set('allow_general_knowledge', 'false');
       if (sessionTestMode) body.set('dry_run', 'true');
       const res = await fetch('/api/ingest_note', { method: 'POST', body });
@@ -2256,40 +2432,67 @@
   // 불필요). 배속 조절은 차후과제로 미뤄두고 지금은 고정 1.5초 간격.
   const REPLAY_DELAY_MS = 1500;
 
+  // 2026-10-17 재설계(사용자 지적): "실제 사람이 필기하는 상황"을 시뮬레이션
+  // 한다면, 실시간 입력도 힌트가 달릴 때까지 기다리면서 입력하지 않는다 --
+  // 강의를 들으며 자기 속도대로 계속 써내려가고, 힌트는 뒤이어 알아서
+  // 따라붙는 구조다. 기존 구현은 각 줄마다 `await fetch(...)`로 백엔드
+  // 전체 파이프라인(Tier2면 평균 10초 이상)이 끝날 때까지 기다린 "후"에야
+  // 다음 줄로 넘어가서, 1.5초보다 훨씬 긴 체감 간격이 생겼었음(실측: 사용자가
+  // 직접 느낀 "입력텀이 길다"는 제보로 발견). 이제 각 줄은 즉시(1.5초 간격)
+  // 화면에 그려지고, 백엔드 요청은 기다리지 않고 곧장 다음 줄로 넘어간다 --
+  // 힌트는 응답이 오는 대로(순서 무관하게) 그 줄의 마커로 나중에 붙는다
+  // (submitNote()가 실시간 타이핑에서 이미 쓰는 것과 똑같은 비동기 패턴:
+  // 줄은 먼저 보이고, 마커만 나중에 따라붙음). 조건: "입력이 빨리 이루어지는
+  // 경우라도 힌트마커가 해당 필기의 끝에 정확히만 달리면 된다"(사용자
+  // 확인) -- node 참조를 클로저로 들고 있다가 그 node에 직접 붙이므로,
+  // 여러 줄이 동시에 처리 중이어도 각자 자기 줄에 정확히 붙는다.
   async function playReplayUpload(chunks, medium, filename) {
+    setServiceStatus('재생 중...', 'busy');
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       setAgentStatus(`업로드 재생 중... (${i + 1}/${chunks.length})`);
-      setServiceStatus(`재생 중... (${i + 1}/${chunks.length})`, 'busy');
-      let result;
-      try {
-        const body = new URLSearchParams({
-          content: chunk.content, course_id: COURSE_ID, session_id: SESSION_ID,
-          origin_prefix: 'replay', medium,
-        });
-        const res = await fetch('/api/ingest_note', { method: 'POST', body });
-        result = await res.json();
-      } catch (e) {
-        console.error('재생 중 줄 처리 실패:', e);
-        continue; // 한 줄 실패해도 나머지는 계속 재생
-      }
+
       const n = {
         content: chunk.content,
         created_at: new Date().toISOString(),
         session_id: SESSION_ID,
         client_line_id: null,
-        origin_ref: result.origin_ref,
-        tier2_result: result.tier2_result,
-        tier2_sources: result.tier2_sources,
+        origin_ref: null,
+        tier2_result: null,
+        tier2_sources: null,
         inserted_out_of_place: false,
       };
-      const pair = renderNote(n);
+      renderNote(n); // 힌트 없이 줄만 즉시 그림(날짜/세션 구분선 포함) -- 마커는 아래서 응답 오면 따로 붙음
+      const node = noteBody.lastElementChild;
       renderedCount++;
       todayLineCount++;
       lastSavedAt = new Date();
       updateNoteStatus();
       updateAgentStats();
-      if (isNearBottom(noteScroll)) scrollNodeIntoView(pair ? pair.noteMarker : noteBody.lastElementChild);
+      if (isNearBottom(noteScroll)) scrollNodeIntoView(node);
+
+      pendingSubmitCount++; // "필기 종료"가 이 재생이 끝날 때까지 기다리게(기존 패턴 재사용)
+      (async () => {
+        try {
+          const body = new URLSearchParams({
+            content: chunk.content, course_id: COURSE_ID, session_id: SESSION_ID,
+            search_course_ids: resolveSearchCourseIds().join(','),
+            origin_prefix: 'replay', medium,
+          });
+          const res = await fetch('/api/ingest_note', { method: 'POST', body });
+          const result = await res.json();
+          node.dataset.lastSubmittedText = chunk.content;
+          if (result.routing_decision === 'tier2' && result.tier2_result) {
+            addMarkerPair(node, result.tier2_result, 'hint', result.origin_ref, result.tier2_sources);
+            updateAgentStats();
+          }
+        } catch (e) {
+          console.error('재생 중 줄 처리 실패:', e);
+        } finally {
+          pendingSubmitCount--;
+        }
+      })();
+
       if (i < chunks.length - 1) await new Promise((r) => setTimeout(r, REPLAY_DELAY_MS));
     }
     fileStatusText.textContent = `${filename} (재생 완료, ${chunks.length}개)`;
@@ -3019,6 +3222,23 @@
       ...tombstones.map((t) => ({ kind: 'tombstone', data: t, t: t.session_started_at })),
     ].sort((a, b) => new Date(a.t) - new Date(b.t));
 
+    // 2026-10-18: 완전히 빈 노트(필기도 삭제된세션 묘비도 0건)의 첫 구분선이
+    // 아예 안 뜨던 버그(노트 묶음 테스트 중 사용자 제보) -- 날짜/세션 구분선
+    // 삽입 로직(insertUnitDivider/maybeInsertSessionDivider)이 전부
+    // renderNote(Fast)() 안, 즉 "복원할 기존 행이 있을 때"만 호출되는 구조라,
+    // 복원할 게 하나도 없는 진짜 첫 사용 시점엔 아무것도 안 호출돼서 생긴
+    // 틈. 지금까지 유일했던 노트(sesac_bootcamp)는 이미 대량의 재생
+    // 데이터를 갖고 있어서 이 "0건" 상태 자체가 한 번도 실행된 적이 없었음
+    // -- 새 노트 기능으로 드러난 기존 설계의 빈틈. startNewSession()을 한 번
+    // 호출해 첫 구분선("새 필기 시작")을 심어준다.
+    // cleanExit(정상종료 후 재시작) 플래그는 노트별이 아니라 전역 키라서,
+    // "하필 cleanExit 직후에 처음 보는 빈 노트로 전환"처럼 극히 드문 조합이면
+    // 아래 cleanExit 분기가 startNewSession()을 한 번 더 불러 구분선이
+    // 중복될 수 있다 -- 여기서는 그 경우를 피해서 호출한다.
+    if (timeline.length === 0 && !localStorage.getItem('notemate.cleanExit')) {
+      startNewSession();
+    }
+
     // 성능(2026-10-08 실측, 2,400여 줄 기준 체감 지연 확인): renderNote()를
     // 그대로 수천 번 돌리면 "문단 쓰기 -> offsetTop 읽기"가 매 줄마다
     // 번갈아 일어나서, 매번 브라우저가 레이아웃을 강제로 다시 계산한다
@@ -3113,7 +3333,14 @@
         noteScroll.scrollTo({ top: noteScroll.scrollHeight });
         startNewSession({ autoTriggered: true });
       } else {
-        const savedTop = Number(localStorage.getItem(SCROLL_POS_KEY()));
+        // 2026-10-18: localStorage.getItem()이 null을 반환하면(저장된 적
+        // 없음) Number(null)은 NaN이 아니라 0이라서, 바로 위 주석의 "기록된
+        // 적이 없으면 맨 아래로" 의도와 달리 "저장된 위치가 0(맨 위)"으로
+        // 잘못 처리되고 있었음(기존 유일한 노트는 이미 오래전에 저장된 값이
+        // 있어서 안 드러났던 틈, 새 노트 기능으로 재현됨). null을 먼저
+        // 걸러서 NaN으로 바꿔 의도대로 "맨 아래" 분기를 타게 한다.
+        const rawSavedTop = localStorage.getItem(SCROLL_POS_KEY());
+        const savedTop = rawSavedTop === null ? NaN : Number(rawSavedTop);
         if (!Number.isNaN(savedTop)) {
           noteScroll.scrollTop = savedTop;
         } else {
@@ -3523,6 +3750,218 @@
   // 필기창에 다시 포커스/입력이 들어오면(= 필기입력모드 재개) 최신 위치로 스냅
   noteBody.addEventListener('focus', jumpToLive);
   noteBody.addEventListener('input', jumpToLive);
+
+  // ===== 내보내기(2026-10-18) =====
+  const exportBtn = document.getElementById('export-btn');
+  const exportBackdrop = document.getElementById('export-modal-backdrop');
+  const exportRangeFields = document.getElementById('export-range-fields');
+  const exportRangeNote = document.getElementById('export-range-note');
+  const exportSessionFields = document.getElementById('export-session-fields');
+  const exportSessionList = document.getElementById('export-session-list');
+  const exportStartDate = document.getElementById('export-start-date');
+  const exportEndDate = document.getElementById('export-end-date');
+  const exportIncludeHints = document.getElementById('export-include-hints');
+  let exportSessionsLoaded = false;
+
+  function escHtml(s) {
+    return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function updateExportScopeVisibility() {
+    const scope = document.querySelector('input[name="export-scope"]:checked').value;
+    exportRangeFields.style.display = scope === 'range' ? 'flex' : 'none';
+    exportRangeNote.style.display = scope === 'range' ? 'block' : 'none';
+    exportSessionFields.style.display = scope === 'sessions' ? 'block' : 'none';
+  }
+  document.querySelectorAll('input[name="export-scope"]').forEach((r) => {
+    r.addEventListener('change', updateExportScopeVisibility);
+  });
+
+  async function loadExportSessionList() {
+    if (exportSessionsLoaded) return;
+    exportSessionsLoaded = true;
+    try {
+      const res = await fetch(`/api/sessions?course_id=${encodeURIComponent(COURSE_ID)}`);
+      const sessions = await res.json();
+      exportSessionList.innerHTML = '';
+      if (!sessions.length) {
+        exportSessionList.innerHTML = '<div style="color:var(--color-text-muted); padding:6px;">세션이 아직 없어요.</div>';
+        return;
+      }
+      // 최근 세션이 먼저 보이는 게 고르기 편함(보통 최근 걸 찾을 때가 많음).
+      sessions.slice().reverse().forEach((s) => {
+        const d = new Date(s.started_at);
+        const dateFmt = new Intl.DateTimeFormat('ko-KR', {
+          timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
+          hour: '2-digit', minute: '2-digit',
+        }).format(d);
+        const row = document.createElement('label');
+        row.style.cssText = 'display:flex; align-items:center; gap:6px; padding:4px 2px; cursor:pointer;';
+        row.innerHTML = `<input type="checkbox" value="${s.session_id}"> <span>${dateFmt} · ${s.line_count}줄</span>`;
+        exportSessionList.appendChild(row);
+      });
+    } catch (e) {
+      exportSessionList.innerHTML = '<div style="color:var(--color-danger);">세션 목록을 못 불러왔어요.</div>';
+    }
+  }
+
+  document.getElementById('export-session-select-all').addEventListener('click', () => {
+    exportSessionList.querySelectorAll('input[type="checkbox"]').forEach((c) => { c.checked = true; });
+  });
+  document.getElementById('export-session-select-none').addEventListener('click', () => {
+    exportSessionList.querySelectorAll('input[type="checkbox"]').forEach((c) => { c.checked = false; });
+  });
+
+  exportBtn.addEventListener('click', () => {
+    exportBackdrop.style.display = 'flex';
+    loadExportSessionList();
+  });
+  document.getElementById('export-cancel-btn').addEventListener('click', () => {
+    exportBackdrop.style.display = 'none';
+  });
+  exportBackdrop.addEventListener('click', (ev) => {
+    if (ev.target === exportBackdrop) exportBackdrop.style.display = 'none';
+  });
+
+  function kstDateKey(isoString) {
+    // "YYYY-MM-DD" -> "YYYYMMDD" (en-CA 로케일이 이 순서를 그대로 줌) -- 기존
+    // formatUnitLabel()이 기대하는 입력 형태와 맞춘다(화면 구분선과 같은 포맷 재사용).
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date(isoString)).replace(/-/g, '');
+  }
+
+  function groupNotesByDay(notes) {
+    const groups = [];
+    let current = null;
+    notes.forEach((n) => {
+      const dateKey = kstDateKey(n.created_at);
+      if (!current || current.dateKey !== dateKey) {
+        current = { dateKey, notes: [] };
+        groups.push(current);
+      }
+      current.notes.push(n);
+    });
+    return groups;
+  }
+
+  function buildExportHtml(groups, includeHints, courseName) {
+    const esc = escHtml;
+    const body = groups.map((g) => {
+      const lines = g.notes.map((n) => {
+        let block = `<div class="note-line">${esc(n.content)}</div>`;
+        if (includeHints && n.tier2_result) {
+          block += `<div class="hint-line">💡 ${esc(n.tier2_result)}</div>`;
+        }
+        return block;
+      }).join('\n');
+      return `<h2>${formatUnitLabel(g.dateKey)}</h2>\n${lines}`;
+    }).join('\n');
+    return `<!doctype html>\n<html lang="ko"><head><meta charset="utf-8">\n` +
+      `<title>${esc(courseName)} -- 필기 내보내기</title>\n` +
+      `<style>\n` +
+      `body { max-width: 760px; margin: 2rem auto; padding: 0 1.5rem 4rem; font-family: "Malgun Gothic","맑은 고딕","Apple SD Gothic Neo",sans-serif; line-height: 1.7; color: #1a1a1a; }\n` +
+      `h1 { font-size: 1.4rem; } h2 { font-size: 1.05rem; margin: 2.2rem 0 1rem; padding-bottom: 0.4rem; border-bottom: 2px solid #333; }\n` +
+      `.note-line { white-space: pre-wrap; margin: 0 0 0.3rem; }\n` +
+      `.hint-line { white-space: pre-wrap; background: #fff4e8; border: 1px solid #f0d9b5; border-radius: 6px; padding: 0.5rem 0.75rem; margin: 0 0 0.8rem; font-size: 0.92rem; color: #5a3e1b; }\n` +
+      `@media print { body { margin: 0; max-width: none; } }\n` +
+      `</style></head><body>\n` +
+      `<h1>${esc(courseName)} -- 필기</h1>\n${body}\n</body></html>`;
+  }
+
+  function buildExportPlain(groups, includeHints, ext) {
+    const h2 = ext === 'md' ? '## ' : '';
+    const hintPrefix = ext === 'md' ? '> 💡 ' : '  💡 ';
+    return groups.map((g) => {
+      const lines = g.notes.map((n) => {
+        let block = n.content;
+        if (includeHints && n.tier2_result) block += `\n${hintPrefix}${n.tier2_result}`;
+        return block;
+      }).join('\n\n');
+      return `${h2}${formatUnitLabel(g.dateKey)}\n\n${lines}`;
+    }).join('\n\n\n');
+  }
+
+  function downloadBlob(filename, content, mime) {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+
+  // 저장 위치 직접 고르기(2026-10-18, 사용자 요청: "원하는 위치에 한 번에
+  // 넣고 싶을 수도 있다") -- File System Access API(크로미움 계열만 지원,
+  // 이 서비스는 Chrome/Edge --app= 모드로 실행되니 대부분 해당). 지원 안
+  // 하는 브라우저는 기존 자동 다운로드(항상 다운로드 폴더)로 조용히 대체.
+  async function saveFile(filename, content, mime) {
+    if (window.showSaveFilePicker) {
+      try {
+        const ext = filename.slice(filename.lastIndexOf('.'));
+        const handle = await window.showSaveFilePicker({
+          suggestedName: filename,
+          types: [{ description: ext.slice(1).toUpperCase() + ' 파일', accept: { [mime]: [ext] } }],
+        });
+        const writable = await handle.createWritable();
+        await writable.write(content);
+        await writable.close();
+        return;
+      } catch (e) {
+        if (e.name === 'AbortError') return; // 사용자가 저장 취소 -- 자동 다운로드로 대체하지 않음
+        // 그 외(권한 문제 등)는 기존 자동 다운로드 방식으로 대체
+      }
+    }
+    downloadBlob(filename, content, mime);
+  }
+
+  document.getElementById('export-run-btn').addEventListener('click', async () => {
+    const scope = document.querySelector('input[name="export-scope"]:checked').value;
+    const formats = Array.from(document.querySelectorAll('input[name="export-format"]:checked')).map((c) => c.value);
+    if (!formats.length) { alert('형식을 하나 이상 선택해주세요.'); return; }
+
+    const params = new URLSearchParams({ course_id: COURSE_ID });
+    if (scope === 'range') {
+      if (exportStartDate.value) params.set('start', exportStartDate.value);
+      if (exportEndDate.value) params.set('end', exportEndDate.value);
+    } else if (scope === 'sessions') {
+      const ids = Array.from(exportSessionList.querySelectorAll('input[type="checkbox"]:checked')).map((c) => c.value);
+      if (!ids.length) { alert('세션을 하나 이상 선택해주세요.'); return; }
+      params.set('session_ids', ids.join(','));
+    }
+
+    const runBtn = document.getElementById('export-run-btn');
+    runBtn.disabled = true;
+    runBtn.textContent = '내보내는 중...';
+    try {
+      const res = await fetch(`/api/export_notes?${params.toString()}`);
+      const notes = await res.json();
+      if (!notes.length) { alert('내보낼 필기가 없어요(조건을 확인해주세요).'); return; }
+      const groups = groupNotesByDay(notes);
+      const includeHints = exportIncludeHints.checked;
+      const courseName = currentCourseName();
+      const stamp = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date()).replace(/-/g, '');
+
+      if (formats.includes('html')) {
+        const html = buildExportHtml(groups, includeHints, courseName);
+        const blob = new Blob([html], { type: 'text/html' });
+        window.open(URL.createObjectURL(blob), '_blank');
+      }
+      if (formats.includes('txt')) {
+        await saveFile(`${courseName}_${stamp}.txt`, buildExportPlain(groups, includeHints, 'txt'), 'text/plain');
+      }
+      if (formats.includes('md')) {
+        await saveFile(`${courseName}_${stamp}.md`, buildExportPlain(groups, includeHints, 'md'), 'text/markdown');
+      }
+      exportBackdrop.style.display = 'none';
+    } catch (e) {
+      alert('내보내기 실패: ' + e);
+    } finally {
+      runBtn.disabled = false;
+      runBtn.textContent = '내보내기';
+    }
+  });
 </script>
 
 </body>

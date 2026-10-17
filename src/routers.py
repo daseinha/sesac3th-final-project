@@ -101,7 +101,22 @@ def compute_routing_decision(state: NoteMateState) -> Literal["tier2", "store_on
     # 무관하게 보강하는 게 맞다고 판단해 여기 추가. session_dup 체크는 이
     # 조건보다 먼저 와서(위) -- 세션 내에서 방금 다룬 내용이면 "새 개념"
     # 판단이어도 중복 힌트를 또 만들지 않음(일관성 유지).
-    if assessment and assessment["is_new_concept"]:
+    #
+    # 2026-10-18 수정: top_score 게이트 추가(바로 아래 is_abbreviated 분기와
+    # 같은 패턴). 6차 사이클(gpt-6-luna) 분석에서 발견된 구조적 사각지대 --
+    # 이 분기엔 top_score 조건이 전혀 없어서, top_score=1.0(사실상 완전
+    # 중복)인 반복 템플릿 문구("# daily stand-up" 등)에도 LLM이 is_new_concept
+    # =True로 오판하면 그대로 tier2가 발동했다(2026-10-17 CLAUDE.md "6차 사이클
+    # 완료" 항목, "구조적 사각지대" 참고 -- 그땐 당장 안 고치고 보완 포인트로만
+    # 남겨뒀던 것). `top_score < HIGH_THRESHOLD`를 추가해서, "거의 똑같은
+    # 내용"이면 LLM이 새 개념이라고 오판해도 무시하고 store_only 쪽 로직으로
+    # 넘어가게 한다 -- 진짜 새로운 내용(top_score가 낮거나 중간)에는 기존과
+    # 똑같이 작동한다.
+    if (
+        assessment
+        and assessment["is_new_concept"]
+        and (top_score is None or top_score < HIGH_THRESHOLD)
+    ):
         return "tier2"
     if top_score is not None and top_score < LOW_THRESHOLD:
         return "tier2"

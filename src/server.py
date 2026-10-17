@@ -13,7 +13,7 @@ import json
 import os
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -34,7 +34,10 @@ from src.db import (
     get_session_time_range,
     get_today_hints,
     get_upload_labels,
+    get_hint_excluded_origin_refs,
     insert_deleted_session,
+    list_sessions,
+    record_hint_exclusion,
     record_hint_feedback,
     record_line_deletion,
 )
@@ -163,6 +166,7 @@ def api_ingest_note(
     # 빈 문자열이 정상적으로 통과해야 해서 명시적 기본값(Form(""))으로 바꿈.
     content: str = Form(""),
     course_id: str = Form(_DEFAULT_COURSE_ID),
+    search_course_ids: str | None = Form(None),
     session_id: str = Form(...),
     origin_prefix: str = Form("live"),
     client_line_id: str | None = Form(None),
@@ -217,6 +221,12 @@ def api_ingest_note(
     `/api/upload_for_replay`가 돌려준 `medium`(파일 형식에 따라 txt/pdf/notion
     등)을 그대로 실어 보낸다 -- 라이브 타이핑 경로는 건드리지 않음.
 
+    `search_course_ids`(2026-10-17 야간, 노트 묶음/RAG 공유그룹): 콤마로 구분된
+    course_id 목록 문자열(예: "a,b,c"). 프론트가 지금 노트가 속한 묶음 전체를
+    계산해서 보낸다 -- 안 보내면(None) `ingest_note()`가 `course_id` 하나로
+    대체해서 기존 동작과 동일. 저장되는 노트(`course_id`)는 안 바뀌고, Tier2
+    검색/확신도 계산의 "범위"만 넓어진다.
+
     content가 빈 문자열(필기 줄을 지우고 제출한 경우): 전체 파이프라인을
     타지 않고 `record_line_deletion()`으로 바로 간다(2026-10-10, 사용자
     요청 -- "수정이 되는데 삭제가 안 되는 건 이상하다"). `client_line_id`가
@@ -237,12 +247,16 @@ def api_ingest_note(
         }
 
     origin_ref = f"{origin_prefix}:{session_id}:{datetime.now().isoformat()}"
+    parsed_search_course_ids = (
+        [c.strip() for c in search_course_ids.split(",") if c.strip()] if search_course_ids else None
+    )
     state = ingest_note(
         content=content,
         source="personal",
         medium=medium,
         origin_ref=origin_ref,
         course_id=course_id,
+        search_course_ids=parsed_search_course_ids,
         timestamp=datetime.now(),
         session_id=session_id,
         client_line_id=client_line_id,
@@ -359,6 +373,33 @@ def api_hint_feedback_state() -> dict:
                 if record.get("event_type") == "feedback" and ref:
                     state[ref] = record["value"]
     return state
+
+
+@app.post("/api/hint_exclude")
+def api_hint_exclude(
+    origin_ref: str = Form(...),
+    excluded: bool = Form(...),
+) -> dict:
+    """"힌트 예외처리" 체크박스(2026-10-17 야간 설계, `+`/`-`/`✓`와는 별개 신호) --
+
+    이 줄은 양식/템플릿이라 힌트 생성 대상 자체가 아니라고 표시(또는 해제)한다.
+    `feedback_value`를 공유하지 않고 `note_chunks.hint_excluded` 전용 컬럼에
+    기록 -- 품질 반응(+/-/✓)과 범주 제외(이거)가 같은 줄에 동시에 존재할 수
+    있어야 하기 때문. 지금은 이 신호가 쌓이기만 하고(평가셋/피드백선택평가셋
+    진행용) 실제 라우팅/힌트생성 억제 로직에는 아직 연결 안 함 -- 그건 서비스
+    화면(notemate_mockup.html)의 확인/복구 UI와 함께 이후 별도 작업.
+    """
+    reflected = record_hint_exclusion(origin_ref, excluded)
+    return {"ok": True, "reflected": reflected}
+
+
+@app.get("/api/hint_exclude_state")
+def api_hint_exclude_state() -> dict:
+    """현재 예외처리(hint_excluded=TRUE)된 origin_ref 목록을 {origin_ref: true} 형태로 반환.
+
+    새로고침 후 체크박스 선택 상태를 복원하는 데 쓴다(hint_feedback_state와 같은 용도).
+    """
+    return {ref: True for ref in get_hint_excluded_origin_refs()}
 
 
 @app.post("/api/model_preference")
@@ -531,6 +572,81 @@ def api_all_notes(
             "inserted_out_of_place": n["inserted_out_of_place"],
         }
         for n in notes
+    ]
+
+
+_KST = ZoneInfo("Asia/Seoul")
+
+
+@app.get("/api/export_notes")
+def api_export_notes(
+    course_id: str = _DEFAULT_COURSE_ID,
+    start: str | None = None,
+    end: str | None = None,
+    session_ids: str | None = None,
+) -> list[dict]:
+    """노트 내보내기(2026-10-18) -- 조건에 맞는 원본 데이터를 반환하고,
+    실제 문서/텍스트 조립은 프론트엔드가 담당한다(화면에 이미 있는 날짜
+    구분 로직을 그대로 재사용하기 위해 -- 같은 걸 서버에서 또 구현하면
+    화면 표시와 내보내기 결과가 서로 어긋날 위험이 생김).
+
+    `start`/`end`는 KST 달력 날짜(YYYY-MM-DD) 문자열, 둘 다 생략하면 전체
+    기간(지금 보이는 화면과 동일). `get_all_notes()`에는 "after만 있으면
+    sim: 데이터를 일부러 제외하는 빠른 경로"가 있는데(실시간 분할로딩
+    최적화용, 위 api_all_notes 참고) -- 내보내기에서 그 경로를 타면 "최근
+    날짜부터" 내보낼 때 재생 테스트 데이터가 조용히 빠지는 사고가 날 수
+    있다. 그래서 `after`를 줄 땐 항상 `before`도 같이 줘서(끝 날짜 생략
+    시 지금(KST)+1일을 기본값으로) 항상 완전한(느리지만 안전한) 경로를
+    타도록 강제한다.
+
+    `session_ids`(콤마구분, `start`/`end`와 배타적-- 프론트가 둘 중 하나만
+    보냄): 날짜범위의 한계(재생 테스트로 대량 백필된 데이터는 실제 역사적
+    날짜가 `created_at`에 안 남아있어서 날짜범위로 못 골라짐, 사용자와 논의
+    후 결정) 보완책 -- 날짜와 무관하게 세션 단위로 직접 골라서 내보낼 수
+    있게 한다. 이 경우 전체를 가져온 뒤 파이썬에서 필터링한다(내보내기는
+    자주 발생하는 핫패스가 아니라 단순함을 우선).
+    """
+    if session_ids:
+        wanted = set(session_ids.split(","))
+        notes = [n for n in get_all_notes(course_id) if n["session_id"] in wanted]
+    else:
+        after_dt = datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=_KST) if start else None
+        before_dt = (
+            datetime.strptime(end, "%Y-%m-%d").replace(tzinfo=_KST) + timedelta(days=1) if end else None
+        )
+        if after_dt is not None and before_dt is None:
+            before_dt = datetime.now(_KST) + timedelta(days=1)
+        notes = get_all_notes(course_id, after=after_dt, before=before_dt)
+    return [
+        {
+            "content": n["content"],
+            "tier2_result": n["tier2_result"],
+            "tier2_sources": n["tier2_sources"],
+            "created_at": n["created_at"].isoformat(),
+            "origin_ref": n["origin_ref"],
+            "session_id": n["session_id"],
+        }
+        for n in notes
+    ]
+
+
+@app.get("/api/sessions")
+def api_sessions(course_id: str = _DEFAULT_COURSE_ID) -> list[dict]:
+    """노트 내보내기 "세션 선택" 모드의 선택 목록용 -- session_id/시작시각/줄수.
+
+    라벨(화면의 "N번째 필기" 같은 서수)까지는 안 만든다 -- 그건 전체
+    타임라인을 순서대로 훑어야 계산되는 화면 전용 로직이라(notemate_mockup.html
+    참고), 여기선 시작시각+줄수만 주고 "YYYY-MM-DD HH:MM · N줄"처럼 프론트가
+    가볍게 표시하면 충분하다.
+    """
+    sessions = list_sessions(course_id)
+    return [
+        {
+            "session_id": s["session_id"],
+            "started_at": s["started_at"].isoformat(),
+            "line_count": s["line_count"],
+        }
+        for s in sessions
     ]
 
 

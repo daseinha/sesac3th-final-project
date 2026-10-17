@@ -127,7 +127,22 @@ with pool.connection() as conn:
                 block = f'<div class="line-block {cls}"><div class="content">{content_esc}'
                 if not h6 and not h5:
                     block += '<span class="routing-tag store-only">둘 다 STORE ONLY</span>'
-                block += "</div>" + "".join(panels) + "</div>"
+                block += "</div>"
+                # 2026-10-17 야간 정정(사용자 지적): 예외처리는 "힌트 문구" 단위가 아니라
+                # "이 필기 내용(줄)" 단위 판단이어야 함 -- A/B 비교 화면이라 같은 내용에
+                # 모델별로 origin_ref가 2개(6차/5차) 생겨서, 힌트박스마다 따로 체크박스를
+                # 두면 "힌트 A는 예외, 힌트 B는 아님" 같은 말이 안 되는 상태가 가능해짐.
+                # 그래서 체크박스를 content 바로 아래, 줄 전체에 하나만 두고 관련된
+                # origin_ref 전부(둘 다 힌트면 2개, 하나면 1개)에 동시에 적용한다.
+                if h6 or h5:
+                    relevant_origins = [o for o, has_hint in ((o6, h6), (o5, h5)) if has_hint]
+                    origins_csv = ",".join(relevant_origins)
+                    block += (
+                        f'<label class="exclude-row line-exclude"><input type="checkbox" class="exclude-cb" '
+                        f'data-origins="{origins_csv}">이 필기 내용은 힌트 생성 대상 아님 '
+                        "(템플릿/양식, 예외처리)</label>"
+                    )
+                block += "".join(panels) + "</div>"
                 lines_html.append(block)
 
             day_blocks.append(
@@ -177,6 +192,11 @@ h2.day-heading { font-size:1.15rem; margin:2.5rem 0 1rem 0; padding:0.5rem 0.75r
 .fb-btn.selected.fb-minus { background:#c23b3b; color:#fff; border-color:#c23b3b; }
 .fb-btn.selected.fb-check { background:#3457d5; color:#fff; border-color:#3457d5; }
 .fb-note { font-size:0.7rem; color:#aaa; text-align:right; margin-top:0.15rem; }
+.exclude-row { display:flex; align-items:center; gap:5px; font-size:0.74rem; color:#876; margin:0.3rem 0 0.5rem 0;
+  cursor:pointer; }
+.exclude-row input { margin:0; cursor:pointer; }
+.line-block:has(.exclude-cb:checked) .content,
+.line-block:has(.exclude-cb:checked) .hint-box { opacity:0.45; }
 """
 
 body_html = "".join(day_blocks)
@@ -190,7 +210,10 @@ html = (
     "블라인드(힌트 A/B, 매 줄 랜덤배치 -- 어느 모델이 A/B인지는 개별 줄마다 안 드러남)로 "
     "블라인드(힌트 A/B, 매 줄 랜덤배치)로 비교합니다. 한쪽만 힌트를 만든 줄은 그 하나만, "
     "둘 다 store_only면 내용만 표시합니다. 피드백 버튼은 실제 서비스와 같은 "
-    "<code>/api/hint_feedback</code>에 기록됩니다(session_id=\"review-5v6-2026-10-17\"로 구분).</div>\n"
+    "<code>/api/hint_feedback</code>에 기록됩니다(session_id=\"review-5v6-2026-10-17\"로 구분). "
+    "필기 내용 바로 아래 체크박스는 \"힌트 예외처리\"(템플릿/양식이라 이 줄 자체가 힌트 대상이 "
+    "아닌 경우) 표시용 -- 힌트 문구가 아니라 필기 줄 단위 판단이라 A/B 두 힌트에 동시 적용됩니다. "
+    "+/-/✓와는 별개 신호(note_chunks.hint_excluded), 체크/해제 둘 다 언제든 가능합니다.</div>\n"
     "<div class=\"summary\"><table>\n"
     f"<tr><td>전체 줄 수</td><td class=\"num\">{total_lines:,}</td></tr>\n"
     f"<tr><td>날짜(회차) 수</td><td class=\"num\">{len(dates)}</td></tr>\n"
@@ -274,6 +297,29 @@ html = (
     "        const value = state[box.dataset.origin];\n"
     "        if (!value) return;\n"
     "        box.querySelectorAll('.fb-btn').forEach((b) => { b.classList.toggle('selected', b.dataset.value === value); });\n"
+    "      });\n"
+    "    })\n"
+    "    .catch(() => {});\n"
+    "  // 힌트 예외처리 체크박스(2026-10-17 야간 설계, 같은 날 밤 정정) -- +/-/✓와 별개 신호,\n"
+    "  // note_chunks.hint_excluded 컬럼에 기록. 판단 단위는 '힌트 문구'가 아니라\n"
+    "  // '이 필기 내용(줄)'이라, A/B 비교에서 같은 줄에 origin_ref가 2개(6차/5차) 생기면\n"
+    "  // data-origins(콤마구분)에 둘 다 담아 한 체크로 둘 다에 반영한다. 지금은 라우팅에\n"
+    "  // 연결 안 됨(평가셋 데이터 수집용).\n"
+    "  document.querySelectorAll('.exclude-cb').forEach((cb) => {\n"
+    "    const origins = cb.dataset.origins.split(',').filter(Boolean);\n"
+    "    cb.addEventListener('change', () => {\n"
+    "      origins.forEach((origin) => {\n"
+    "        const body = new URLSearchParams({ origin_ref: origin, excluded: cb.checked ? 'true' : 'false' });\n"
+    "        fetch('/api/hint_exclude', { method: 'POST', body }).catch(() => {});\n"
+    "      });\n"
+    "    });\n"
+    "  });\n"
+    "  fetch('/api/hint_exclude_state')\n"
+    "    .then((res) => res.json())\n"
+    "    .then((state) => {\n"
+    "      document.querySelectorAll('.exclude-cb').forEach((cb) => {\n"
+    "        const origins = cb.dataset.origins.split(',').filter(Boolean);\n"
+    "        if (origins.some((o) => state[o])) cb.checked = true;\n"
     "      });\n"
     "    })\n"
     "    .catch(() => {});\n"

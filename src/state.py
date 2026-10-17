@@ -22,6 +22,13 @@ class NoteMateState(TypedDict):
     source: Literal["personal", "base", "stt_reference"]
     medium: Literal["txt", "paper_ocr", "notion", "video_caption"]
     course_id: str | None
+    search_course_ids: list[str] | None  # 2026-10-17 야간: 노트 묶음(RAG 공유그룹).
+    # `course_id`는 이 필기가 "저장되는" 노트(하나로 고정) -- 이 필드는 "검색
+    # 범위"(묶인 노트 전체, 자기 자신 포함)로 분리해둔 것. assess_note/
+    # tier2_deep_agent가 top_score·Tier2 근거 검색에 쓰고, 비어있으면
+    # `[course_id]`로 대체해서 기존 동작(단일 노트)과 동일하게 동작한다.
+    # 세션 내 작업기억(중복방지)은 일부러 이 필드를 안 씀 -- "방금 전혀 다른
+    # 노트에서 다룬 내용"을 세션중복으로 치면 안 되므로 항상 현재 노트 단독.
     note_timestamp: str | None  # ISO 문자열. DB 컬럼명(note_timestamp)과 통일
     origin_ref: str
     session_id: str | None  # 호출하는 쪽이 지정. 세션 경계 판단은 백엔드가 안 함

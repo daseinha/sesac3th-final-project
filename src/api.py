@@ -25,6 +25,7 @@ def ingest_note(
     medium: Literal["txt", "paper_ocr", "notion", "video_caption"],
     origin_ref: str,
     course_id: str | None = None,
+    search_course_ids: list[str] | None = None,
     timestamp: datetime | None = None,
     session_id: str | None = None,
     client_line_id: str | None = None,
@@ -42,6 +43,10 @@ def ingest_note(
         medium: "txt" / "paper_ocr" / "notion" / "video_caption".
         origin_ref: 원본 파일/줄 위치 (원문 보기용 참조).
         course_id: 주차/토픽 단위 식별자 (예: "langgraph_week"). 모르면 None.
+        search_course_ids: 노트 묶음(RAG 공유그룹, 2026-10-17 야간) -- 이 필기가
+            저장되는 노트는 여전히 course_id 하나지만, Tier2 검색/확신도 계산
+            범위는 여기 넘긴 목록(자기 자신 포함)으로 넓어진다. 안 넘기면
+            [course_id]로 대체돼 기존 동작(단일 노트)과 동일.
         timestamp: 필기 작성 시각. 모르면 None (임의로 채우지 않음).
         session_id: 세션 내 작업기억(중복 힌트 방지)에 쓸 식별자. 세션 경계는
             호출하는 쪽이 정한다 -- 안 넘기면 세션 기능 없이 동작(기존과 동일).
@@ -76,6 +81,7 @@ def ingest_note(
         "source": source,
         "medium": medium,
         "course_id": course_id,
+        "search_course_ids": search_course_ids,
         "note_timestamp": timestamp.isoformat() if timestamp else None,
         "origin_ref": origin_ref,
         "session_id": session_id,
@@ -120,6 +126,7 @@ def ingest_file(
     path: str,
     source: Literal["personal", "base", "stt_reference"],
     course_id: str | None = None,
+    search_course_ids: list[str] | None = None,
     session_id: str | None = None,
     upload_label: str | None = None,
 ) -> list[NoteMateState]:
@@ -143,6 +150,7 @@ def ingest_file(
             medium=medium,
             origin_ref=note.origin_ref,
             course_id=course_id,
+            search_course_ids=search_course_ids,
             timestamp=note.timestamp,
             session_id=session_id,
             upload_label=upload_label,

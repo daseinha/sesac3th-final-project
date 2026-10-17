@@ -34,7 +34,9 @@ class _VectorRetriever(BaseRetriever):
     EnsembleRetriever가 여러 Retriever를 같은 인터페이스로 다뤄야 해서 필요함.
     """
 
-    course_id: str | None = None
+    # 2026-10-17 야간: 노트 묶음(RAG 공유그룹) -- 리스트를 받으면 묶인 노트
+    # 전체를 검색 범위로 삼는다(search_similar_chunks로 그대로 전달).
+    course_id: str | list[str] | None = None
     k: int = 5
     # 호출부(tier2_deep_agent)가 assess_note에서 이미 계산해둔 임베딩을 넘겨주면
     # 그걸 그대로 쓴다 -- 같은 필기 내용을 또 임베딩하는 중복 호출을 피하기
@@ -65,7 +67,7 @@ class _VectorRetriever(BaseRetriever):
 
 
 def build_hybrid_retriever(
-    course_id: str | None, k: int = 5, query_embedding: list[float] | None = None
+    course_id: str | list[str] | None, k: int = 5, query_embedding: list[float] | None = None
 ) -> tuple[EnsembleRetriever | None, BM25Retriever | None]:
     """벡터 검색 + BM25(Kiwi) 결합 리트리버 생성.
 

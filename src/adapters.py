@@ -42,40 +42,48 @@ def parse_txt_notes(path: str) -> list[NoteInput]:
 
     실제 사용자 파일 형식(2026-09-30 확인): 타임스탬프가 조각마다 따로 없고,
     "20260715 수 (...) 점심 (...)" 같은 날짜 헤더가 하루 분량 시작마다 나온다.
-    빈 줄로 대략적인 단락(주제)이 나뉜다.
 
-    처리 방식: 빈 줄로 전체를 문단 나눈 뒤, 순서대로 훑으면서 날짜 헤더 패턴을
-    만나면 "현재 날짜"를 그 값으로 갱신 -- 이후 문단들은 다음 헤더가 나올 때까지
-    그 날짜를 그대로 물려받는다. 파일명에 날짜가 있으면(기존 "파일 하나=하루"
-    파일들) 그걸 시작 기본값으로 쓰고, 파일 맨 앞에 헤더가 없어도 자연스럽게
-    맞아떨어진다. 합본 파일처럼 파일명에 날짜가 없으면 첫 헤더를 만나기 전까지는
-    timestamp=None.
+    처리 방식: **줄 단위**로 훑으면서(2026-10-17 교체, 아래 참고) 날짜 헤더
+    패턴을 만나면 "현재 날짜"를 그 값으로 갱신 -- 이후 줄들은 다음 헤더가
+    나올 때까지 그 날짜를 그대로 물려받는다. 파일명에 날짜가 있으면(기존
+    "파일 하나=하루" 파일들) 그걸 시작 기본값으로 쓰고, 파일 맨 앞에 헤더가
+    없어도 자연스럽게 맞아떨어진다. 합본 파일처럼 파일명에 날짜가 없으면 첫
+    헤더를 만나기 전까지는 timestamp=None.
 
     ([잠정] 이전 버전은 "조각마다 [YYYY-MM-DD HH:MM] 인라인 표시"를 가정했는데,
-    실제 파일과 달라서 이 버전으로 교체함 -- CLAUDE.md 변경 이력 참고.)
+    실제 파일과 달라서 교체함 -- CLAUDE.md 변경 이력 참고.)
+
+    **2026-10-17, 빈 줄(문단) 단위 -> 줄 단위로 재교체**: 원래(2026-09-30)는
+    빈 줄로 문단을 나눴는데, 이게 **실시간 타이핑 경로(Enter=즉시 제출)와
+    사이클테스트 재생 스크립트(`simulate_day.py`의 `fine_grained_units()`,
+    둘 다 줄 단위)와 어긋나는 것으로 2026-10-16~17에 드러남** -- 업로드
+    기능으로 직접 재현(빈 줄 없는 테스트 파일을 올렸더니 11줄이 통째로 문단
+    1개로 합쳐짐). 사용자 확인: "사이클테스트에 쓰인 날짜별 필기파일의 입력
+    방식이 내 필기 컨벤션이고, 강의 들으며 바로 입력하는 대부분의 사람들의
+    컨벤션이기도 하다" -- 그 컨벤션(줄 단위)을 업로드 경로의 기준으로 확정.
+    이제 실시간 타이핑/사이클테스트/파일 업로드 셋 다 "줄 하나 = 필기 하나"로
+    통일됨(`fine_grained_units()`와 같은 필터 로직을 그대로 재사용).
     """
     origin_path = normalize_data_path(path)
     match = _FILENAME_DATE_RE.match(Path(path).stem)
     current_date = datetime.strptime(match.group(1), "%Y%m%d") if match else None
 
     text = open(path, encoding="utf-8").read()
-    paragraphs = [
-        p.strip()
-        for p in text.split("\n\n")
-        if p.strip() and _has_substantial_content(p)
-    ]
+    lines = [line.strip() for line in text.split("\n")]
 
     notes: list[NoteInput] = []
-    for i, paragraph in enumerate(paragraphs):
-        header_match = _DAY_HEADER_RE.search(paragraph)
+    for i, line in enumerate(lines):
+        if not line or not _has_substantial_content(line):
+            continue
+        header_match = _DAY_HEADER_RE.match(line)
         if header_match:
             current_date = datetime.strptime(header_match.group(1), "%Y%m%d")
-            # 헤더 문단(날짜/장소/점심메뉴) 자체는 학습 내용이 아니라 메타정보라
+            # 헤더 줄(날짜/장소/점심메뉴) 자체는 학습 내용이 아니라 메타정보라
             # 청크로 남기지 않는다 -- 날짜 갱신에만 쓰고 건너뜀. 2026-09-30 실측:
             # 이런 헤더 조각이 경계 구간(top_score 0.7~0.9)에서 Tier2를 낭비시킨
             # 사례의 대부분(62%, 45개 중 28개)이었음. CLAUDE.md 변경 이력 참고.
             continue
-        notes.append(NoteInput(content=paragraph, timestamp=current_date, origin_ref=f"{origin_path}:{i}"))
+        notes.append(NoteInput(content=line, timestamp=current_date, origin_ref=f"{origin_path}:{i}"))
     return notes
 
 

@@ -45,7 +45,19 @@ _ACTIVE_SESSION_FILTER = """
 """
 
 
-def search_top_similarity(embedding: list[float], course_id: str | None) -> dict | None:
+def _normalize_course_ids(course_id: str | list[str] | None) -> list[str] | None:
+    """노트 묶음(RAG 공유그룹, 2026-10-17 야간) 지원용 정규화 헬퍼.
+
+    기존 호출부는 전부 단일 문자열(`course_id="sesac_bootcamp"`)을 넘기고,
+    묶음 검색이 필요한 새 호출부는 리스트(`["a", "b", "c"]`)를 넘긴다 --
+    둘 다 받아서 항상 리스트(또는 필터 없음 의미의 None)로 통일한다.
+    """
+    if not course_id:
+        return None
+    return [course_id] if isinstance(course_id, str) else list(course_id)
+
+
+def search_top_similarity(embedding: list[float], course_id: str | list[str] | None) -> dict | None:
     """note_chunks에서 embedding과 가장 유사한 기존 행의 코사인 유사도(0~1에 가까움)와
     그 행의 피드백 상태(feedback_value/feedback_at)를 함께 반환.
 
@@ -59,9 +71,15 @@ def search_top_similarity(embedding: list[float], course_id: str | None) -> dict
     파이썬 list를 psycopg에 그냥 넘기면 double precision[]로 직렬화돼서
     pgvector의 <=> 연산자가 못 알아본다 -- 그래서 %s::vector로 명시적으로
     캐스팅한다 (register_vector 어댑터 자동 등록보다 이 방식이 더 안정적).
+
+    `course_id`에 리스트를 넘기면(노트 묶음, 2026-10-17 야간) 그 묶음 전체에서
+    가장 유사한 걸 찾는다 -- "관련 노트끼리는 서로 친숙도 판단에도 참고한다"는
+    설계 의도 그대로(새 글을 쓸 때 묶인 다른 노트에 비슷한 내용이 있었으면
+    그것도 "이미 아는 내용"으로 쳐준다).
     """
     pool = get_pool()
-    course_filter = "AND course_id = %(course_id)s" if course_id else ""
+    course_ids = _normalize_course_ids(course_id)
+    course_filter = "AND course_id = ANY(%(course_ids)s)" if course_ids else ""
     query = f"""
         SELECT 1 - (embedding <=> %(embedding)s::vector) AS similarity,
                feedback_value, feedback_at
@@ -74,7 +92,7 @@ def search_top_similarity(embedding: list[float], course_id: str | None) -> dict
     """
     with pool.connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(query, {"embedding": embedding, "course_id": course_id})
+            cur.execute(query, {"embedding": embedding, "course_ids": course_ids})
             row = cur.fetchone()
             if not row:
                 return None
@@ -100,8 +118,44 @@ def record_hint_feedback(origin_ref: str, value: str) -> bool:
             return cur.rowcount > 0
 
 
+def record_hint_exclusion(origin_ref: str, excluded: bool) -> bool:
+    """"힌트 예외처리"(2026-10-17 야간 설계, deferred-hint-feedback-plus-minus-logic.md 참고) --
+
+    이 힌트가 달린 원본 필기 행이 양식/템플릿이라 앞으로 힌트 생성 대상이
+    아니라고 표시(또는 해제)한다. `feedback_value`(+/-/✓)와는 **별개 컬럼**으로
+    둔 이유: 의미가 다른 신호라(품질 반응 vs 범주 제외) 같은 컬럼을 공유하면
+    서로 덮어써서 공존할 수 없게 됨. 체크 해제 시 `excluded=False`로 다시
+    호출하면 되돌릴 수 있다(원복 가능, 데이터 손실 없음).
+    """
+    pool = get_pool()
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE note_chunks SET hint_excluded = %(excluded)s, "
+                "hint_excluded_at = CASE WHEN %(excluded)s THEN now() ELSE NULL END "
+                "WHERE origin_ref = %(origin_ref)s;",
+                {"excluded": excluded, "origin_ref": origin_ref},
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+
+def get_hint_excluded_origin_refs() -> list[str]:
+    """현재 `hint_excluded=TRUE`로 표시된 origin_ref 전체를 반환.
+
+    로그 파일이 아니라 DB 컬럼이 곧 정본(canonical state)이라, 체크상태
+    복원용으로 이 목록 하나면 충분하다(hint_feedback_state처럼 로그를
+    순서대로 훑어 재구성할 필요 없음).
+    """
+    pool = get_pool()
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT origin_ref FROM note_chunks WHERE hint_excluded = TRUE;")
+            return [row[0] for row in cur.fetchall()]
+
+
 def search_similar_chunks(
-    embedding: list[float], course_id: str | None, k: int = 5
+    embedding: list[float], course_id: str | list[str] | None, k: int = 5, exclude_questions: bool = True
 ) -> list[dict]:
     """note_chunks에서 embedding과 유사한 상위 k개 행을 반환 (content/source/origin_ref 포함).
 
@@ -119,18 +173,31 @@ def search_similar_chunks(
     (라우팅 확신도 계산용)에는 이 필터를 일부러 적용하지 않는다 -- 적용하면
     라우팅 자체가 바뀌어서 3차 대비 4차 비교에 "근거 필터링"과 "라우팅 로직
     변경"이 뒤섞이게 된다(힌트 출처 표시 전용 경로에만 영향을 한정).
+
+    `exclude_questions=False`(2026-10-17 추가, 힌트 피드백 반영 로직 버그 수정)로
+    호출하면 위 필터를 끈다 -- 실사용 중 발견: "바로 물어보기"/명시적 질문
+    줄은 전부 is_question=True라서, 그 줄에 준 +/- 피드백이 다음에 비슷한
+    질문이 들어와도 이 필터에 걸려 영원히 검색이 안 되는 구조적 버그였음(사용자가
+    같은 질문에 `-`를 두 번 줘도 전혀 반영 안 되는 걸 실측으로 재현). "근거
+    표시용 검색"(위 문단 목적)과 "피드백 이력 확인용 검색"은 서로 다른
+    목적이라 둘을 분리 -- 피드백 확인은 질문이든 아니든 과거에 비슷한 내용에
+    준 피드백을 찾아야 하므로 이 필터가 없어야 한다.
     """
     # feedback_value/tier2_result 추가(2026-10-17, 힌트 피드백 반영 로직) --
     # 과거에 이 내용과 비슷한 힌트가 +/-를 받았는지 tier2_deep_agent가 알아야
     # "다르게 다시 시도"/"이 방식 유지" 지시를 프롬프트에 넣을 수 있다.
+    # 2026-10-17 야간: 노트 묶음(RAG 공유그룹) -- course_id에 리스트를 넘기면
+    # 묶인 노트 전체를 Tier2 근거 검색 범위로 삼는다.
     pool = get_pool()
-    course_filter = "AND course_id = %(course_id)s" if course_id else ""
+    course_ids = _normalize_course_ids(course_id)
+    course_filter = "AND course_id = ANY(%(course_ids)s)" if course_ids else ""
+    question_filter = "AND is_question IS NOT TRUE" if exclude_questions else ""
     query = f"""
         SELECT content, source, origin_ref, feedback_value, tier2_result,
                1 - (embedding <=> %(embedding)s::vector) AS similarity
         FROM note_chunks
         WHERE embedding IS NOT NULL
-          AND is_question IS NOT TRUE
+        {question_filter}
         {course_filter}
         {_ACTIVE_SESSION_FILTER}
         ORDER BY embedding <=> %(embedding)s::vector
@@ -138,12 +205,12 @@ def search_similar_chunks(
     """
     with pool.connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(query, {"embedding": embedding, "course_id": course_id, "k": k})
+            cur.execute(query, {"embedding": embedding, "course_ids": course_ids, "k": k})
             columns = [c.name for c in cur.description]
             return [dict(zip(columns, row)) for row in cur.fetchall()]
 
 
-def fetch_corpus_for_bm25(course_id: str | None) -> list[dict]:
+def fetch_corpus_for_bm25(course_id: str | list[str] | None) -> list[dict]:
     """BM25 인덱스를 만들기 위해 course_id 범위의 note_chunks content를 전부 가져온다.
 
     LangChain의 BM25Retriever가 인메모리 방식이라, 매 검색 시점에 이 함수로
@@ -173,8 +240,11 @@ def fetch_corpus_for_bm25(course_id: str | None) -> list[dict]:
     """
     # feedback_value/tier2_result 추가(2026-10-17) -- search_similar_chunks()와
     # 같은 이유(힌트 피드백 반영 로직이 BM25 매치 경로에서도 동작해야 함).
+    # 2026-10-17 야간: 노트 묶음(RAG 공유그룹) -- course_id에 리스트를 넘기면
+    # 묶인 노트 전체를 BM25 코퍼스 범위로 삼는다(search_similar_chunks와 짝).
     pool = get_pool()
-    course_and = "AND course_id = %(course_id)s" if course_id else ""
+    course_ids = _normalize_course_ids(course_id)
+    course_and = "AND course_id = ANY(%(course_ids)s)" if course_ids else ""
     query = f"""
         SELECT content, source, origin_ref, feedback_value, tier2_result
         FROM note_chunks
@@ -186,7 +256,7 @@ def fetch_corpus_for_bm25(course_id: str | None) -> list[dict]:
     """
     with pool.connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(query, {"course_id": course_id})
+            cur.execute(query, {"course_ids": course_ids})
             columns = [c.name for c in cur.description]
             return [dict(zip(columns, row)) for row in cur.fetchall()]
 
@@ -490,6 +560,49 @@ def get_all_notes(
     with pool.connection() as conn:
         with conn.cursor() as cur:
             cur.execute(query, params)
+            columns = [c.name for c in cur.description]
+            return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+
+def list_sessions(course_id: str | None) -> list[dict]:
+    """노트 내보내기(2026-10-18) "세션 선택" 모드용 -- 이 노트의 세션 목록을
+    시작시각 오래된순으로 반환(session_id, started_at, line_count).
+
+    날짜 범위(`created_at` 기준) 내보내기는 재생 테스트로 대량 백필된 데이터엔
+    못 쓴다는 한계가 있어서(그 데이터는 실제 역사적 날짜와 무관하게 전부
+    이번 주 안에 삽입됨, api_export_notes 참고) -- 날짜와 무관하게 "이
+    세션(하루 분량)"을 통째로 고를 수 있는 대안으로 추가. get_all_notes()와
+    같은 필터(personal만, paper_ocr/빈내용 제외, 삭제된 세션 제외) +
+    **같은 중복제거**(client_line_id별 최신본만)를 똑같이 적용해야 한다 --
+    처음엔 "집계(COUNT)라 어느 버전이 잡히든 영향 없다"고 생각했는데 실측
+    해보니 틀렸음(2026-10-18): COUNT(*)는 같은 줄을 고쳐 쓴 과거 버전까지
+    전부 세서, 편집이 많았던 세션(예: 2026-10-08, UI 개발 중 여러 번
+    수정/병합/분할 테스트했던 날)은 실제 내보내기 결과(줄 수)보다 훨씬 큰
+    숫자를 보여줬다(실측: 두 세션 합쳐 11로 표시됐는데 실제 내보내기는 4줄).
+    """
+    pool = get_pool()
+    course_filter = "AND course_id = %(course_id)s" if course_id else ""
+    query = f"""
+        WITH ranked AS (
+            SELECT session_id, created_at, client_line_id,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY client_line_id ORDER BY created_at DESC
+                   ) AS rn
+            FROM note_chunks
+            WHERE source = 'personal' AND medium != 'paper_ocr' AND content != ''
+              AND session_id IS NOT NULL
+              {course_filter}
+              {_ACTIVE_SESSION_FILTER}
+        )
+        SELECT session_id, MIN(created_at) AS started_at, count(*) AS line_count
+        FROM ranked
+        WHERE client_line_id IS NULL OR rn = 1
+        GROUP BY session_id
+        ORDER BY started_at ASC;
+    """
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, {"course_id": course_id})
             columns = [c.name for c in cur.description]
             return [dict(zip(columns, row)) for row in cur.fetchall()]
 
