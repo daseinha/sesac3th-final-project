@@ -95,6 +95,19 @@ def compute_routing_decision(state: NoteMateState) -> Literal["tier2", "store_on
     ):
         return "store_only"
 
+    # 힌트 예외처리(2026-10-18, 평가셋 기록 메커니즘은 10/17 야간에 먼저 구현,
+    # 라우팅 연결은 여기서 완성) -- 가장 비슷한 과거 필기가 "힌트 불필요
+    # (템플릿/양식)"로 체크돼 있고, 그게 지금 필기와 충분히 비슷하면(top_score
+    # >= HIGH_THRESHOLD -- "거의 같은 패턴"이라는 뜻으로, is_abbreviated/
+    # is_new_concept 분기가 "근접 중복"을 판단할 때 쓰는 것과 같은 기준 재사용)
+    # 조용히 넘어간다. 유사도 기준을 넣은 이유: 표시 자체는 "가장 비슷한 과거
+    # 행 1개"에만 달려있어서, 기준 없이 그대로 믿으면 약하게만 비슷한(사실상
+    # 무관한) 새 필기까지 엉뚱하게 억제될 위험이 있음 -- ✓ 억제(바로 위)에는
+    # 이 기준이 없지만, 그건 "이미 확인된 피드백 의미"라 다르게 설계된 기존
+    # 패턴이라 그대로 두고, 이건 새로 연결하는 거라 안전하게 게이트를 둠.
+    if state.get("top_match_hint_excluded") and top_score is not None and top_score >= HIGH_THRESHOLD:
+        return "store_only"
+
     # is_new_concept은 계산만 되고 라우팅엔 한 번도 안 쓰이고 있었음(2026-10-02,
     # 6/8일차 리뷰 중 발견 -- CLAUDE.md "라우팅 기준 보강" 변경 이력 참고).
     # LLM이 명시적으로 "새 개념"이라고 판단했다면 top_score/is_abbreviated와

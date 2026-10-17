@@ -82,7 +82,7 @@ def search_top_similarity(embedding: list[float], course_id: str | list[str] | N
     course_filter = "AND course_id = ANY(%(course_ids)s)" if course_ids else ""
     query = f"""
         SELECT 1 - (embedding <=> %(embedding)s::vector) AS similarity,
-               feedback_value, feedback_at
+               feedback_value, feedback_at, hint_excluded
         FROM note_chunks
         WHERE embedding IS NOT NULL
         {course_filter}
@@ -96,7 +96,12 @@ def search_top_similarity(embedding: list[float], course_id: str | list[str] | N
             row = cur.fetchone()
             if not row:
                 return None
-            return {"similarity": row[0], "feedback_value": row[1], "feedback_at": row[2]}
+            return {
+                "similarity": row[0],
+                "feedback_value": row[1],
+                "feedback_at": row[2],
+                "hint_excluded": row[3],
+            }
 
 
 def record_hint_feedback(origin_ref: str, value: str) -> bool:

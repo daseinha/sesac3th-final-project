@@ -75,6 +75,10 @@ class NoteMateState(TypedDict):
     # DB 컬럼에도 남긴다(persist_note) -- "억제가 실제로 몇 번 발동했는지"를
     # 나중에 쿼리로 뽑을 수 있게(`routing_decision='store_only' AND
     # top_match_feedback_value='✓'`이면 그때 발동한 것).
+    top_match_hint_excluded: bool  # 2026-10-18: 가장 비슷한 과거 필기가 "힌트
+    # 예외처리"(note_chunks.hint_excluded) 표시돼 있는지. session_duplicate_
+    # elapsed_seconds와 같은 패턴의 임시 필드 -- 라우팅 판단에만 쓰고 DB 컬럼은
+    # 없음(지금은 추가 분석 가치보다 변경 범위를 좁게 유지하는 걸 우선함).
 
     # --- 라우팅 결과 ---
     routing_decision: Literal["tier2", "store_only"] | None

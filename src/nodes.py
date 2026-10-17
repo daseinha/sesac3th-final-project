@@ -131,6 +131,11 @@ def assess_note(state: NoteMateState) -> dict:
         top_match_feedback_days_ago = (
             datetime.now(timezone.utc) - top_match["feedback_at"]
         ).total_seconds() / 86400
+    # 힌트 예외처리(2026-10-18 야간 설계, 2026-10-18 라우팅 연결) -- 가장
+    # 비슷한 과거 필기가 "힌트 불필요(템플릿/양식)" 표시돼 있는지. 실제 억제
+    # 여부(+유사도 기준) 판단은 ✓ 억제와 같은 자리에서 routers.
+    # compute_routing_decision이 함.
+    top_match_hint_excluded = bool(top_match and top_match.get("hint_excluded"))
 
     session_id = state.get("session_id")
     session_duplicate_score, session_duplicate_elapsed_seconds = (
@@ -166,6 +171,7 @@ def assess_note(state: NoteMateState) -> dict:
         "session_duplicate_elapsed_seconds": session_duplicate_elapsed_seconds,
         "top_match_feedback_value": top_match_feedback_value,
         "top_match_feedback_days_ago": top_match_feedback_days_ago,
+        "top_match_hint_excluded": top_match_hint_excluded,
     }
 
 
