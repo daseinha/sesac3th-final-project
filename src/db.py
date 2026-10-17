@@ -120,10 +120,13 @@ def search_similar_chunks(
     라우팅 자체가 바뀌어서 3차 대비 4차 비교에 "근거 필터링"과 "라우팅 로직
     변경"이 뒤섞이게 된다(힌트 출처 표시 전용 경로에만 영향을 한정).
     """
+    # feedback_value/tier2_result 추가(2026-10-17, 힌트 피드백 반영 로직) --
+    # 과거에 이 내용과 비슷한 힌트가 +/-를 받았는지 tier2_deep_agent가 알아야
+    # "다르게 다시 시도"/"이 방식 유지" 지시를 프롬프트에 넣을 수 있다.
     pool = get_pool()
     course_filter = "AND course_id = %(course_id)s" if course_id else ""
     query = f"""
-        SELECT content, source, origin_ref,
+        SELECT content, source, origin_ref, feedback_value, tier2_result,
                1 - (embedding <=> %(embedding)s::vector) AS similarity
         FROM note_chunks
         WHERE embedding IS NOT NULL
@@ -168,10 +171,12 @@ def fetch_corpus_for_bm25(course_id: str | None) -> list[dict]:
     한쪽이라도 질문 행을 인정하면 뚫림). `= FALSE`가 아니라 `IS NOT TRUE`를
     쓰는 이유도 동일(NULL인 업로드 자료를 제외하면 안 됨).
     """
+    # feedback_value/tier2_result 추가(2026-10-17) -- search_similar_chunks()와
+    # 같은 이유(힌트 피드백 반영 로직이 BM25 매치 경로에서도 동작해야 함).
     pool = get_pool()
     course_and = "AND course_id = %(course_id)s" if course_id else ""
     query = f"""
-        SELECT content, source, origin_ref
+        SELECT content, source, origin_ref, feedback_value, tier2_result
         FROM note_chunks
         WHERE content != ''
           AND is_question IS NOT TRUE
@@ -301,6 +306,14 @@ def get_recent_session_boundary(course_id: str | None, session_limit: int) -> da
     "바로 물어보기"(`ask:` origin_ref)도 2026-10-14부터 단위 집계에 포함한다
     -- get_all_notes()와 같은 이유(질문도 타임라인의 일부). 질문만 있고
     일반 필기가 없는 세션도 "활성 세션 1개"로 정상 집계된다.
+
+    `sim:`(재생 테스트) 접두사 데이터는 2026-10-17부터 집계에서 제외한다 --
+    6차 사이클 재생이 자정을 넘겨서까지 실시간으로 계속 돌면서, 재생이 만든
+    "하루치 세션"들이 실제 삽입 시각 기준으로 "최근 N개"에 끼어들어 경계가
+    오늘 자정으로 잡히고, 그 결과 거의 전체 재생 데이터(2,303줄 중 1,999줄)가
+    "최근"으로 분류되는 문제가 실측으로 확인됨. 재생 테스트 데이터는 실제
+    사람이 지금 막 쓴 세션이 아니므로 "최근성" 판단에서 원천적으로 빼는 게
+    맞음(사용자 확인 후 반영).
     """
     pool = get_pool()
     course_filter = "AND course_id = %(course_id)s" if course_id else ""
@@ -312,6 +325,7 @@ def get_recent_session_boundary(course_id: str | None, session_limit: int) -> da
             FROM note_chunks
             WHERE source = 'personal'
               AND content != ''
+              AND origin_ref NOT LIKE 'sim:%%'
               {course_filter}
               {_ACTIVE_SESSION_FILTER}
         ),
@@ -388,6 +402,13 @@ def get_all_notes(
     쪽에서 걸러줘야 "삭제됐다"는 게 실제로 반영된다 -- 안 그러면 새로고침할
     때 지운 세션이 다시 나타나 버림.
 
+    `medium != 'paper_ocr'`(2026-10-17 추가): 종이 필기 스캔본(61페이지)은
+    한 번에 일괄 백필된 참고자료라, "순차적으로 쌓인 필기 흐름"을 보여주는
+    이 타임라인에 끼워 넣으면 어색함(사용자 지적: "그건 한번에 넣은
+    거잖아"). RAG 검색 쪽(search_similar_chunks 등)은 이 필터와 무관하게
+    계속 검색 대상으로 씀 -- 화면 표시만 빠지고 힌트 생성 근거로는 그대로
+    쓰이는, `content != ''` 삭제 처리와 같은 성격의 분리.
+
     `content != ''`(2026-10-10 추가): 같은 `client_line_id`의 최신 버전이
     빈 내용이면 그 줄 전체를 화면에서 뺀다 -- `record_line_deletion()`이
     과거 줄을 지우고 Enter 누르면 남기는 "삭제됨" 표시. RAG 검색 쪽
@@ -424,14 +445,27 @@ def get_all_notes(
     inner_time_filter = ""
     outer_time_filter = ""
     if after is not None and before is None:
-        inner_time_filter = " AND created_at >= %(after)s"
+        # 빠른 경로(최근 창). `sim:`(재생 테스트) 데이터는 여기서 원천 제외한다
+        # -- 2026-10-17 실측: 6차 사이클 재생이 실제 삽입 시각 기준 10/16~17에
+        # 전부 몰려있어서, `created_at >= after` 조건만으로는 경계를 아무리
+        # 조정해도 사이클테스트 2,303줄이 거의 그대로 "최근 창"에 다시
+        # 잡힘(get_recent_session_boundary의 단위 집계에서만 sim을 뺀 걸로는
+        # 안 풀리는 문제였음 -- 그건 경계값 계산만 바꿀 뿐, 여기 이 조건은
+        # 그대로 실제 시각으로만 걸렀기 때문). 재생 테스트 데이터는 실제
+        # 사람이 지금 쓰는 세션이 아니므로, 아래 else 분기(배경 로딩)로 항상
+        # 보내도록 여기서 명시적으로 뺀다.
+        inner_time_filter = " AND created_at >= %(after)s AND origin_ref NOT LIKE 'sim:%%'"
         params["after"] = after
     else:
         if after is not None:
             outer_time_filter += " AND created_at >= %(after)s"
             params["after"] = after
         if before is not None:
-            outer_time_filter += " AND created_at < %(before)s"
+            # 위 빠른 경로에서 뺀 `sim:` 데이터가 여기(배경 로딩)로 전부
+            # 들어오도록, 시간 조건과 OR로 묶는다 -- 그래야 "실제 삽입 시각은
+            # 최근이지만 사이클테스트라 빠른 경로에서 빠진" 행들이 어느
+            # 쪽에서도 안 빠지고 정확히 한 번씩만 로딩된다.
+            outer_time_filter += " AND (created_at < %(before)s OR origin_ref LIKE 'sim:%%')"
             params["before"] = before
     query = f"""
         WITH all_notes AS (
@@ -442,6 +476,7 @@ def get_all_notes(
                    ) AS rn
             FROM note_chunks
             WHERE source = 'personal'
+              AND medium != 'paper_ocr'
               {course_filter}
               {_ACTIVE_SESSION_FILTER}
               {inner_time_filter}

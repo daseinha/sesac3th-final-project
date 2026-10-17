@@ -324,6 +324,16 @@
           </div>
         </div>
         <input id="file-input" type="file" style="display: none;">
+        <!-- 재생모드 업로드(2026-10-17, [[deferred-visual-replay-upload-feature]]) --
+             상시 노출 체크박스였다가, 사용자 지적으로 설계 변경: 평소엔 전혀
+             안 보이다가 파일을 "선택한 직후" 딱 그 순간에만 선택지 2개(즉시저장/
+             재생모드)를 보여준다 -- 업로드라는 행위와 분리되지 않으면서도
+             화면을 상시 차지하지 않음. 파일 형식 무관하게 동일 적용. -->
+        <div id="upload-mode-choice" style="display: none; align-items: center; gap: 6px; font-size: 12.5px;">
+          <span style="color: var(--color-text-muted);">어떻게 처리할까요?</span>
+          <button id="upload-mode-instant-btn" type="button" style="border: 1px solid var(--color-border-input); background: var(--color-surface); border-radius: 6px; padding: 5px 10px; font-size: 12.5px; cursor: pointer; color: var(--color-ink);">즉시저장</button>
+          <button id="upload-mode-replay-btn" type="button" style="border: 1px solid var(--color-border-input); background: var(--color-surface); border-radius: 6px; padding: 5px 10px; font-size: 12.5px; cursor: pointer; color: var(--color-ink);" title="화면에 한 조각씩 재생하며 입력/힌트생성 과정을 보여줍니다.">재생모드로 보기</button>
+        </div>
       </div>
       <!-- 2026-10-08: 전엔 "세션 진행 중" 고정 텍스트(id도 없고 JS 연결도
            전혀 없는 순수 장식)였음 -- 사용자 지적으로 실제 상태 반영하도록
@@ -867,6 +877,9 @@
   const uploadBtn = document.getElementById('upload-btn');
   const fileInput = document.getElementById('file-input');
   const fileStatusText = document.getElementById('file-status-text');
+  const uploadModeChoice = document.getElementById('upload-mode-choice');
+  const uploadModeInstantBtn = document.getElementById('upload-mode-instant-btn');
+  const uploadModeReplayBtn = document.getElementById('upload-mode-replay-btn');
   const serviceStatusDot = document.getElementById('service-status-dot');
   const serviceStatusText = document.getElementById('service-status-text');
 
@@ -2234,24 +2247,104 @@
     }
   });
 
+  // 업로드 재생모드(2026-10-17, [[deferred-visual-replay-upload-feature]]) --
+  // 파싱된 조각(content만, 형식 무관)을 받아 고정 간격으로 하나씩 실제
+  // ingest_note()에 흘려보내면서, 결과를 renderNote()로 그대로 그린다.
+  // renderNote()는 원래 pollForNewNotes()가 "외부에서 들어온 새 필기"를
+  // 그릴 때 쓰는 함수라, 재생 중 생기는 줄도 똑같은 경로로 처리 -- 날짜/세션
+  // 구분선, 마커 부착까지 전부 기존 로직 그대로 재사용된다(새 렌더링 코드
+  // 불필요). 배속 조절은 차후과제로 미뤄두고 지금은 고정 1.5초 간격.
+  const REPLAY_DELAY_MS = 1500;
+
+  async function playReplayUpload(chunks, medium, filename) {
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      setAgentStatus(`업로드 재생 중... (${i + 1}/${chunks.length})`);
+      setServiceStatus(`재생 중... (${i + 1}/${chunks.length})`, 'busy');
+      let result;
+      try {
+        const body = new URLSearchParams({
+          content: chunk.content, course_id: COURSE_ID, session_id: SESSION_ID,
+          origin_prefix: 'replay', medium,
+        });
+        const res = await fetch('/api/ingest_note', { method: 'POST', body });
+        result = await res.json();
+      } catch (e) {
+        console.error('재생 중 줄 처리 실패:', e);
+        continue; // 한 줄 실패해도 나머지는 계속 재생
+      }
+      const n = {
+        content: chunk.content,
+        created_at: new Date().toISOString(),
+        session_id: SESSION_ID,
+        client_line_id: null,
+        origin_ref: result.origin_ref,
+        tier2_result: result.tier2_result,
+        tier2_sources: result.tier2_sources,
+        inserted_out_of_place: false,
+      };
+      const pair = renderNote(n);
+      renderedCount++;
+      todayLineCount++;
+      lastSavedAt = new Date();
+      updateNoteStatus();
+      updateAgentStats();
+      if (isNearBottom(noteScroll)) scrollNodeIntoView(pair ? pair.noteMarker : noteBody.lastElementChild);
+      if (i < chunks.length - 1) await new Promise((r) => setTimeout(r, REPLAY_DELAY_MS));
+    }
+    fileStatusText.textContent = `${filename} (재생 완료, ${chunks.length}개)`;
+    setAgentStatus('업로드 재생 완료', { autoReset: true });
+    setServiceStatus('세션 진행 중', 'idle');
+  }
+
+  // 파일을 고른 직후, 두 버튼 중 하나를 누를 때까지 기다린다. 선택지는
+  // 그 순간에만 나타났다가 고르면 바로 사라짐 -- 평소엔 화면에 전혀 없음.
+  function waitForUploadModeChoice() {
+    return new Promise((resolve) => {
+      uploadModeChoice.style.display = 'flex';
+      const onPick = (replayMode) => {
+        uploadModeChoice.style.display = 'none';
+        uploadModeInstantBtn.removeEventListener('click', onInstant);
+        uploadModeReplayBtn.removeEventListener('click', onReplay);
+        resolve(replayMode);
+      };
+      const onInstant = () => onPick(false);
+      const onReplay = () => onPick(true);
+      uploadModeInstantBtn.addEventListener('click', onInstant);
+      uploadModeReplayBtn.addEventListener('click', onReplay);
+    });
+  }
+
   uploadBtn.addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', async () => {
     const file = fileInput.files[0];
     if (!file) return;
-    fileStatusText.textContent = `${file.name} (처리 중...)`;
+    fileStatusText.textContent = `${file.name} (처리 방식 선택...)`;
     fileStatusText.style.color = 'var(--color-ink)';
+    const replayMode = await waitForUploadModeChoice();
+    fileStatusText.textContent = `${file.name} (처리 중...)`;
     setServiceStatus('자료 업로드 중...', 'busy');
     const formData = new FormData();
     formData.append('file', file);
     formData.append('source', 'base');
-    formData.append('course_id', COURSE_ID);
     const chosenLabel = currentUploadLabelName();
-    if (chosenLabel) formData.append('upload_label', chosenLabel);
     uploadBtn.disabled = true;
     try {
-      const res = await fetch('/api/ingest_file', { method: 'POST', body: formData });
-      const result = await res.json();
-      fileStatusText.textContent = `${result.filename} (${result.chunks_saved}개 청크)`;
+      if (replayMode) {
+        // 재생모드는 ingest_note()를 직접 여러 번 부르므로 upload_label을
+        // 아직 안 실어보냄(2026-10-17, 범위를 핵심 재생 흐름으로 좁힘) --
+        // 필요해지면 /api/ingest_note에 그 필드를 추가해서 연결 가능.
+        const res = await fetch('/api/upload_for_replay', { method: 'POST', body: formData });
+        const result = await res.json();
+        fileStatusText.textContent = `${result.filename} (재생 준비, ${result.chunks.length}개)`;
+        await playReplayUpload(result.chunks, result.medium, result.filename);
+      } else {
+        formData.append('course_id', COURSE_ID);
+        if (chosenLabel) formData.append('upload_label', chosenLabel);
+        const res = await fetch('/api/ingest_file', { method: 'POST', body: formData });
+        const result = await res.json();
+        fileStatusText.textContent = `${result.filename} (${result.chunks_saved}개 청크)`;
+      }
     } catch (e) {
       fileStatusText.textContent = '업로드 실패: ' + e;
       fileStatusText.style.color = 'var(--color-danger)';

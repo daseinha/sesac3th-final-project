@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from src.db import insert_note_chunk, log_failed_ingestion, search_top_similarity
 from src.llm import embed_text, invoke_chat, invoke_structured
 from src.retrieval import build_hybrid_retriever
-from src.routers import compute_routing_decision
+from src.routers import NEGATIVE_FEEDBACK_SUPPRESS_THRESHOLD, compute_routing_decision
 from src.session_memory import add_to_session, check_session_duplicate
 from src.state import NoteAssessment, NoteMateState
 
@@ -330,6 +330,18 @@ def _tier2_deep_agent_inner(state: NoteMateState, is_question: bool) -> dict:
     bm25_docs = bm25.invoke(state["content"]) if bm25 else []
     bm25_origin_refs = {d.metadata.get("origin_ref") for d in bm25_docs}
 
+    # 힌트 피드백 +/- 반영(2026-10-17). 검색된 비슷한 과거 필기 중 +/- 피드백이
+    # 달린 게 있는지 확인 -- routers.NEGATIVE_FEEDBACK_SUPPRESS_THRESHOLD 주석
+    # 참고. `-` 개수가 임계치를 넘으면(= 몇 번 다르게 시도해도 계속 안 맞았다)
+    # 질문이 아닌 한 조용히 넘어간다.
+    negative_feedback_docs = [d for d in similar_docs if d.metadata.get("feedback_value") == "-"]
+    positive_feedback_docs = [d for d in similar_docs if d.metadata.get("feedback_value") == "+"]
+    if len(negative_feedback_docs) >= NEGATIVE_FEEDBACK_SUPPRESS_THRESHOLD and not is_question:
+        return {
+            "tier2_result": None,
+            "tier2_sources": "반복된 부정적 피드백(-)으로 힌트 생성 보류",
+        }
+
     # allow_general_knowledge=False(2026-10-12 추가) + 근거 자료가 하나도 없으면
     # LLM 호출 자체를 건너뛴다 -- "검색은 됐는데 생성 내용이 부정확"한 것과는
     # 다른 문제(근거 자체가 아예 없는 경우)이지만, 둘 다 "힌트 남발" 완화에
@@ -411,6 +423,26 @@ def _tier2_deep_agent_inner(state: NoteMateState, is_question: bool) -> dict:
             "그 내용 그대로 답변하고, 만약 서로 다르다면 웹검색 결과가 더 최신 정보일 "
             "가능성이 높으니 그것을 우선해서 반영한 답변을 작성하세요."
         )
+    # 힌트 피드백 +/- 반영(2026-10-17) -- 위에서 억제 임계치는 안 넘었지만
+    # `-`가 하나라도 있으면 "다르게 설명"을, 없고 `+`가 있으면 "이 방식 유지"를
+    # 지시한다. 둘 다 있을 수는 없음(있으면 `-`를 우선 -- 개선 시도가 더
+    # 급한 신호).
+    feedback_instruction = ""
+    if negative_feedback_docs:
+        past_attempt = negative_feedback_docs[0].metadata.get("tier2_result") or "(내용 없음)"
+        feedback_instruction = (
+            f"\n\n참고: 비슷한 내용에 대해 이전에 다음과 같이 설명했으나 도움이 "
+            f'안 됐다는 피드백이 있었습니다: "{past_attempt}" -- 이번에는 다른 '
+            "방식(다른 비유, 더 구체적인 예시, 더 짧거나 더 자세하게 등)으로 "
+            "설명해보세요."
+        )
+    elif positive_feedback_docs:
+        past_attempt = positive_feedback_docs[0].metadata.get("tier2_result") or "(내용 없음)"
+        feedback_instruction = (
+            f"\n\n참고: 비슷한 내용에 대해 이전에 다음과 같이 설명했더니 도움이 "
+            f'됐다는 피드백이 있었습니다: "{past_attempt}" -- 이번에도 비슷한 '
+            "방식을 유지하세요."
+        )
     user_prompt = (
         f"방금 필기: {state['content']}\n\n"
         f"판단: is_question={assessment.get('is_question')}, "
@@ -418,6 +450,7 @@ def _tier2_deep_agent_inner(state: NoteMateState, is_question: bool) -> dict:
         f"is_new_concept={assessment.get('is_new_concept')}\n\n"
         f"참고할 이전 필기/웹검색 결과 (관련도 순):\n{context}"
         f"{compare_instruction}"
+        f"{feedback_instruction}"
     )
 
     response = invoke_chat(

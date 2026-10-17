@@ -101,6 +101,21 @@ _FILE_ADAPTERS = {
 }
 
 
+def parse_file(path: str) -> tuple[list, str]:
+    """확장자로 알맞은 어댑터를 골라 파일을 파싱만 하고, ingest_note()는
+    호출하지 않는다 (2026-10-17, 재생모드 업로드 기능 -- `ingest_file()`과
+    `/api/upload_for_replay`가 공통으로 쓰는 파싱 단계만 분리).
+
+    Returns: (NoteInput 리스트, medium 값)
+    """
+    ext = Path(path).suffix.lower()
+    if ext not in _FILE_ADAPTERS:
+        supported = ", ".join(_FILE_ADAPTERS)
+        raise ValueError(f"지원하지 않는 파일 형식: {ext} (지원: {supported})")
+    parse_fn, medium = _FILE_ADAPTERS[ext]
+    return parse_fn(path), medium
+
+
 def ingest_file(
     path: str,
     source: Literal["personal", "base", "stt_reference"],
@@ -109,21 +124,17 @@ def ingest_file(
     upload_label: str | None = None,
 ) -> list[NoteMateState]:
     """업로드된 파일 하나를 확장자로 판별해 알맞은 어댑터로 파싱하고,
-    각 조각을 순서대로 ingest_note()에 투입한다.
+    각 조각을 순서대로 ingest_note()에 투입한다 (즉시 일괄 처리).
 
     사용자/프론트엔드는 "업로드 버튼 하나"로 이 함수만 호출하면 되고,
     txt/PDF 등 형식 차이는 이 함수 내부(어댑터 선택)에서만 처리된다.
+    화면에 줄 단위로 재생하며 보여주고 싶으면 `parse_file()` +
+    `/api/upload_for_replay`(src/server.py) 경로를 대신 쓸 것.
 
     upload_label: 업로드 UI에서 사용자가 고르거나 새로 만든 분류명(2026-10-12).
         이 파일에서 나온 모든 조각에 똑같이 붙는다.
     """
-    ext = Path(path).suffix.lower()
-    if ext not in _FILE_ADAPTERS:
-        supported = ", ".join(_FILE_ADAPTERS)
-        raise ValueError(f"지원하지 않는 파일 형식: {ext} (지원: {supported})")
-
-    parse_fn, medium = _FILE_ADAPTERS[ext]
-    notes = parse_fn(path)
+    notes, medium = parse_file(path)
 
     return [
         ingest_note(

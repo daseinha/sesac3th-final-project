@@ -50,7 +50,15 @@ class _VectorRetriever(BaseRetriever):
         return [
             Document(
                 page_content=c["content"],
-                metadata={"source": c["source"], "origin_ref": c.get("origin_ref"), "similarity": c["similarity"]},
+                metadata={
+                    "source": c["source"],
+                    "origin_ref": c.get("origin_ref"),
+                    "similarity": c["similarity"],
+                    # 힌트 피드백 반영 로직(2026-10-17)이 쓰는 두 필드 --
+                    # tier2_deep_agent 참고.
+                    "feedback_value": c.get("feedback_value"),
+                    "tier2_result": c.get("tier2_result"),
+                },
             )
             for c in chunks
         ]
@@ -82,7 +90,17 @@ def build_hybrid_retriever(
         return None, None
 
     texts = [row["content"] for row in corpus]
-    metadatas = [{"source": row["source"], "origin_ref": row["origin_ref"]} for row in corpus]
+    metadatas = [
+        {
+            "source": row["source"],
+            "origin_ref": row["origin_ref"],
+            # 힌트 피드백 반영 로직(2026-10-17) -- 벡터 경로와 동일하게 BM25
+            # 매치에도 실어서, 어느 경로로 찾았든 과거 +/- 피드백을 알 수 있게.
+            "feedback_value": row.get("feedback_value"),
+            "tier2_result": row.get("tier2_result"),
+        }
+        for row in corpus
+    ]
     bm25 = BM25Retriever.from_texts(texts, metadatas=metadatas, preprocess_func=kiwi_tokenize)
     bm25.k = k
 

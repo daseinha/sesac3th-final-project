@@ -26,7 +26,7 @@ load_dotenv(dotenv_path=str(Path(__file__).resolve().parent.parent / ".env"))
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
-from src.api import ingest_file, ingest_note
+from src.api import ingest_file, ingest_note, parse_file
 from src.db import (
     get_all_notes,
     get_deleted_sessions,
@@ -55,6 +55,12 @@ _FEEDBACK_VALUES = {"+", "−", "-", "✓"}
 # 검색/임베딩/통계 어디에도 안 쓰이니(RAG 소스 아님) 오염 없이, 그래도
 # 생성된 힌트 내용은 나중에 검토할 수 있게 한다.
 _TEST_RUN_LOG = _PROJECT_ROOT / "data" / "test_run_log.jsonl"
+# "피드백선택평가셋"(/review/5v6, 2026-10-17) 전용 -- 5차/6차 힌트 중 어느 쪽을
+# 더 선호하는지(A/B 중 하나, 상호배타) 기록. 기존 +/-/✓(_HINT_FEEDBACK_LOG)는
+# 힌트 하나하나에 대한 개별 평가라 그대로 두고, 이건 "둘 중 어느 쪽이 나은가"라는
+# 별개 성격의 비교 데이터라 별도 로그로 분리(note_chunks에도 안 씀 -- 순수
+# 모델 비교/의사결정용 데이터).
+_MODEL_PREFERENCE_LOG = _PROJECT_ROOT / "data" / "model_preference_log.jsonl"
 
 app = FastAPI(title="NoteMate API")
 
@@ -98,6 +104,12 @@ def _append_test_event(record: dict) -> None:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+def _append_preference_event(record: dict) -> None:
+    _MODEL_PREFERENCE_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(_MODEL_PREFERENCE_LOG, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
 # 개발 중 이 정적 파일들을 수시로 고쳐서 바로 다시 서빙하므로, 브라우저가
 # Cache-Control 없이 알아서 판단(heuristic caching)하게 두지 않고 "매번
 # 서버에 확인해라"라고 명시한다 -- 그래야 일반 새로고침(F5)만으로도 항상
@@ -128,6 +140,21 @@ def serve_run3_review() -> FileResponse:
     )
 
 
+@app.get("/review/5v6")
+def serve_5v6_review() -> FileResponse:
+    """5차(4.1-mini) vs 6차(gpt-6-luna) 힌트 비교 "피드백선택평가셋"(2026-10-17).
+
+    /review/run3과 같은 패턴(같은 출처라 CORS 없이 /api/hint_feedback 직접 호출) --
+    `scripts/generate_5v6_review.py`가 생성한 정적 파일을 그대로 서빙만 한다.
+    (10/17에 사용자가 짚은 구분: 이건 "피드백선택평가셋"이고, run3 쪽은
+    "Tier1 적절성 블라인드 평가셋"이라 성격이 다름 -- 둘 다 별도로 필요.)
+    """
+    return FileResponse(
+        _PROJECT_ROOT / "data" / "review_5v6_hint_comparison.html",
+        headers=_NO_CACHE_HEADERS,
+    )
+
+
 @app.post("/api/ingest_note")
 def api_ingest_note(
     # Form(...)(필수)로 두면 빈 문자열("")이 넘어올 때 FastAPI가 이를
@@ -142,6 +169,8 @@ def api_ingest_note(
     dry_run: bool = Form(False),
     inserted_out_of_place: bool = Form(False),
     allow_general_knowledge: bool = Form(True),
+    medium: str = Form("txt"),
+    upload_label: str | None = Form(None),
 ) -> dict:
     """필기 한 조각(문단/줄 단위)을 받아 파이프라인에 투입.
 
@@ -183,6 +212,11 @@ def api_ingest_note(
     넘김(2026-10-12) -- 근거 부족 + 바로 물어보기일 때만 웹검색(Tavily)이
     개입하도록 src/nodes.py tier2_deep_agent가 이 값을 씀.
 
+    `medium`/`upload_label`(2026-10-17, 재생모드 업로드): 기본값은 기존 동작과
+    동일(txt/None). 재생모드 프론트엔드 루프가 `origin_prefix="replay"` +
+    `/api/upload_for_replay`가 돌려준 `medium`(파일 형식에 따라 txt/pdf/notion
+    등)을 그대로 실어 보낸다 -- 라이브 타이핑 경로는 건드리지 않음.
+
     content가 빈 문자열(필기 줄을 지우고 제출한 경우): 전체 파이프라인을
     타지 않고 `record_line_deletion()`으로 바로 간다(2026-10-10, 사용자
     요청 -- "수정이 되는데 삭제가 안 되는 건 이상하다"). `client_line_id`가
@@ -206,7 +240,7 @@ def api_ingest_note(
     state = ingest_note(
         content=content,
         source="personal",
-        medium="txt",
+        medium=medium,
         origin_ref=origin_ref,
         course_id=course_id,
         timestamp=datetime.now(),
@@ -216,6 +250,7 @@ def api_ingest_note(
         inserted_out_of_place=inserted_out_of_place,
         allow_general_knowledge=allow_general_knowledge,
         is_ask=(origin_prefix == "ask"),
+        upload_label=upload_label,
     )
     if dry_run:
         # note_chunks/세션 작업기억/힌트 노출 통계와 완전히 분리된 파일 --
@@ -273,7 +308,12 @@ def api_hint_feedback(
     kind: str = Form("hint"),
     origin_ref: str | None = Form(None),
 ) -> dict:
-    """힌트(hint) 또는 바로 물어보기 답변(ask)의 버튼(+ / − / ✓) 클릭을 기록한다. 라우팅에는 연결하지 않는다.
+    """힌트(hint) 또는 바로 물어보기 답변(ask)의 버튼(+ / − / ✓) 클릭을 기록한다.
+
+    `✓`는 compute_routing_decision()의 라우팅 억제(Phase 2, 2026-10-08)에 쓰이고,
+    `+`/`−`는 tier2_deep_agent()의 힌트 생성 스타일/억제(2026-10-17)에 쓰인다 --
+    "라우팅에는 연결 안 함"이라던 이전 문구는 ✓ 억제가 추가되며 틀린 서술이
+    됐었음(수정됨).
 
     `origin_ref`: 이 힌트가 달린 필기 줄의 고유 식별자(note_chunks.origin_ref,
     UNIQUE 제약 있음) -- 2026-10-08 추가. 로그 파일(복원용)뿐 아니라
@@ -321,6 +361,45 @@ def api_hint_feedback_state() -> dict:
     return state
 
 
+@app.post("/api/model_preference")
+def api_model_preference(
+    session_id: str = Form(...),
+    pair_key: str = Form(...),
+    preferred_origin: str = Form(""),
+) -> dict:
+    """"피드백선택평가셋"(/review/5v6) 전용 -- 한 줄의 힌트 A/B 중 어느 쪽이
+    더 나은지(상호배타 선택) 기록. `pair_key`는 두 origin_ref를 정렬해서
+    합친 값이라 A/B 배치(화면 표시 순서, 줄마다 랜덤)와 무관하게 항상
+    같은 쌍을 가리킨다. `preferred_origin`을 비워 보내면 "선택 해제"
+    (다시 클릭해서 토글한 경우).
+    """
+    _append_preference_event({
+        "ts": datetime.now().isoformat(timespec="seconds"),
+        "session_id": session_id,
+        "pair_key": pair_key,
+        "preferred_origin": preferred_origin or None,
+    })
+    return {"ok": True}
+
+
+@app.get("/api/model_preference_state")
+def api_model_preference_state() -> dict:
+    """pair_key별 마지막 선택(preferred_origin)만 뽑아 돌려준다 -- 새로고침
+    후 선택 표시 복원용(/api/hint_feedback_state와 같은 패턴)."""
+    state: dict[str, str | None] = {}
+    if _MODEL_PREFERENCE_LOG.exists():
+        with open(_MODEL_PREFERENCE_LOG, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                record = json.loads(line)
+                key = record.get("pair_key")
+                if key:
+                    state[key] = record.get("preferred_origin")
+    return state
+
+
 @app.post("/api/ingest_file")
 async def api_ingest_file(
     file: UploadFile = File(...),
@@ -346,6 +425,39 @@ async def api_ingest_file(
 
     results = ingest_file(str(dest_path), source=source, course_id=course_id, upload_label=upload_label)
     return {"chunks_saved": len(results), "filename": file.filename}
+
+
+@app.post("/api/upload_for_replay")
+async def api_upload_for_replay(
+    file: UploadFile = File(...),
+    source: str = Form("base"),
+) -> dict:
+    """"재생모드로 보여주기" 업로드 전용 -- 파일을 저장하고 **파싱만** 해서
+    조각 목록을 돌려준다 (2026-10-17, [[deferred-visual-replay-upload-feature]]).
+
+    `/api/ingest_file`과 달리 ingest_note()를 호출하지 않는다 -- 그 호출은
+    프론트엔드가 받은 조각 목록을 1~2초 간격으로 하나씩 `/api/ingest_note`
+    (origin_prefix="replay")에 넘기면서 화면에 실시간으로 재생하는 쪽에서
+    담당한다. 파일 형식(txt/pdf/notion)과 무관하게 동일하게 동작 -- 각
+    어댑터가 이미 내놓는 청크 리스트(줄/문단/페이지 단위)를 그대로 쓸 뿐,
+    재생을 위한 별도 파싱 단계가 필요 없다(사용자 지적으로 설계 수정됨).
+    """
+    dest_dir = _PROJECT_ROOT / "data" / source
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_path = dest_dir / file.filename
+
+    with open(dest_path, "wb") as f:
+        f.write(await file.read())
+
+    notes, medium = parse_file(str(dest_path))
+    return {
+        "filename": file.filename,
+        "medium": medium,
+        "chunks": [
+            {"content": n.content, "timestamp": n.timestamp.isoformat() if n.timestamp else None}
+            for n in notes
+        ],
+    }
 
 
 @app.get("/api/upload_labels")

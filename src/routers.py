@@ -27,6 +27,16 @@ SESSION_DUP_REALLOW_SECONDS = int(os.environ.get("SESSION_DUP_REALLOW_SECONDS", 
 # 시작 -- 실사용 데이터가 쌓이면 재검토 필요. .env로 덮어쓸 수 있게 해서 발표
 # 시연 때는 짧게 줄일 수 있음(다른 임계값들과 같은 패턴).
 FEEDBACK_SUPPRESS_DAYS = float(os.environ.get("FEEDBACK_SUPPRESS_DAYS", "7"))
+# 힌트 피드백 +/- 반영 (2026-10-17, 교육장에서 합의한 2단계 설계).
+# tier2_deep_agent가 검색된 비슷한 과거 힌트 중 `-` 피드백 개수를 세어, 이
+# 임계치를 넘으면(= 몇 번 다르게 시도해봤는데도 계속 안 맞았다는 뜻) 힌트
+# 생성을 억제한다(질문이면 예외 -- 질문엔 무조건 답한다는 기존 원칙과 같은
+# 결). 임계치 미만이면 억제 대신 "다르게 설명해보라"는 지시만 추가해서 먼저
+# 개선을 시도한다 -- `✓`와 다르게 `-` 누적은 "사용자가 이미 안다"가 아니라
+# "AI가 그 내용을 계속 잘 못 설명했다"일 수 있어서, 바로 침묵하면 가장
+# 나쁜 결과(도움이 필요한데 조용히 포기)가 될 수 있다는 판단(사용자 지적:
+# "피드백이 부정적이더라도, 그에 대한 대답은 긍정적으로 유도하자").
+NEGATIVE_FEEDBACK_SUPPRESS_THRESHOLD = int(os.environ.get("NEGATIVE_FEEDBACK_SUPPRESS_THRESHOLD", "2"))
 
 
 def compute_routing_decision(state: NoteMateState) -> Literal["tier2", "store_only"]:
@@ -42,6 +52,16 @@ def compute_routing_decision(state: NoteMateState) -> Literal["tier2", "store_on
     # 뒤에 또 물어봐도 "조용히 저장됐어요" 같은 정형 문구 대신 실제 답변이
     # 나간다.
     if assessment and assessment["is_question"]:
+        return "tier2"
+
+    # "바로 물어보기"로 들어온 요청은 is_question 판정과 무관하게 무조건 tier2로
+    # 간다 (2026-10-17, 사용자 지적으로 발견한 갭 수정). is_question은 LLM이
+    # 의미로 판단하므로 물음표 없는 애매한 문장이면 False로 오판할 수 있는데,
+    # 그 경우 top_score가 높거나 new_concept이 아니면 store_only로 빠져
+    # tier2_deep_agent가 아예 안 돌고 사용자가 명시적으로 물어본 질문에 답이
+    # 하나도 안 나오는 상태였음 -- "질문엔 무조건 답한다"는 기존 원칙과 같은
+    # 결로 is_ask도 여기서 강제.
+    if state.get("is_ask"):
         return "tier2"
 
     # 세션 내에서 방금 다룬 내용과 거의 같으면(그리고 "질문"이 아니면), 중복
