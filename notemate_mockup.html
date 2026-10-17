@@ -762,30 +762,15 @@
             <span style="width: 28px; height: 17px; border-radius: 999px; background: var(--color-neutral-300); position: relative; flex-shrink: 0;">
               <span style="position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: var(--color-surface);"></span>
             </span>
-            <span style="font-size: 12px; color: var(--color-text-secondary);">자료 추천</span>
-          </label>
-          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-            <span style="width: 28px; height: 17px; border-radius: 999px; background: var(--color-neutral-300); position: relative; flex-shrink: 0;">
-              <span style="position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: var(--color-surface);"></span>
-            </span>
             <span style="font-size: 12px; color: var(--color-text-secondary);">개념 그래프</span>
-          </label>
-          <!-- 실제로 동작하는 설정(2026-10-12, 사용자 요청) -- 위 4개는 전부
-               미구현 placeholder라 구분하려고 일반 체크박스를 그대로 쓴다.
-               끄면 Tier2가 근거(강의자료/내 필기)를 못 찾았을 때 힌트 생성
-               자체를 건너뛴다(src/nodes.py tier2_deep_agent,
-               allow_general_knowledge) -- 힌트 남발 완화용. 기본값 켜짐
-               (기존 동작 유지), submitNote()/ask 핸들러 둘 다에서 읽어서 같이 보냄. -->
-          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; padding-left: 12px; border-left: 1px solid var(--color-border-input);" title="꺼두면 강의자료/내 필기에 근거가 없을 때 힌트를 만들지 않습니다">
-            <input type="checkbox" id="general-knowledge-toggle" checked style="width: 14px; height: 14px; cursor: pointer; accent-color: var(--color-hint-icon); margin: 0;">
-            <span style="font-size: 12px; font-weight: 700; color: var(--color-hint-icon);">LLM 기본지식 사용</span>
           </label>
           <!-- 테마 세부설정(라이트/다크/커스텀) -- 2026-10-18, 평소엔 안 보이다가
                필요할 때만 꺼내 쓰라는 사용자 요청으로 애드온 서랍 쪽으로 이동.
-               메뉴 내용·구성(라이트/다크 빠른전환 + 커스텀 테마 목록 + 새 테마
-               만들기)은 기존 그대로, 여는 버튼과 위치만 바뀜(위로 펼쳐짐 --
-               서랍이 화면 하단이라 아래로 펼치면 화면 밖으로 나감). -->
-          <div id="theme-settings-chip" style="position: relative; padding-left: 12px; border-left: 1px solid var(--color-border-input);">
+               같은 날 재배치: 서랍 폭이 좁아 한 줄에 다 안 들어가던 걸, 아직
+               미구현인 "자료 추천" 토글을 빼고(구현 우선순위가 상대적으로
+               낮다고 판단, "개념 그래프"는 유지) 그 자리를 당겨써서 해결
+               (사용자 지시). 메뉴 내용·구성은 그대로. -->
+          <div id="theme-settings-chip" style="position: relative;">
             <button type="button" id="theme-settings-btn" aria-haspopup="listbox" aria-expanded="false" style="display: flex; align-items: center; gap: 4px; background: none; border: 1px solid var(--color-border-input); border-radius: 999px; padding: 3px 10px; font-size: 11px; color: var(--color-text-muted); cursor: pointer;">
               🎨 테마 세부설정
             </button>
@@ -820,6 +805,17 @@
               <button type="button" id="custom-theme-new-btn" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px; border: none; background: none; color: var(--color-text-secondary); font-size: 13px; padding: 8px 4px 2px; cursor: pointer;">🎨 새 테마 만들기</button>
             </div>
           </div>
+          <!-- 실제로 동작하는 설정(2026-10-12, 사용자 요청) -- 위 3개(STT/퀴즈생성/
+               개념그래프)는 전부 미구현 placeholder라 구분하려고 일반 체크박스를
+               그대로 쓴다("자료 추천"은 2026-10-18에 공간 확보를 위해 제거,
+               위 테마 세부설정 쪽 주석 참고). 끄면 Tier2가 근거(강의자료/내 필기)를
+               못 찾았을 때 힌트 생성 자체를 건너뛴다(src/nodes.py tier2_deep_agent,
+               allow_general_knowledge) -- 힌트 남발 완화용. 기본값 켜짐
+               (기존 동작 유지), submitNote()/ask 핸들러 둘 다에서 읽어서 같이 보냄. -->
+          <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; padding-left: 12px; border-left: 1px solid var(--color-border-input);" title="꺼두면 강의자료/내 필기에 근거가 없을 때 힌트를 만들지 않습니다">
+            <input type="checkbox" id="general-knowledge-toggle" checked style="width: 14px; height: 14px; cursor: pointer; accent-color: var(--color-hint-icon); margin: 0;">
+            <span style="font-size: 12px; font-weight: 700; color: var(--color-hint-icon);">LLM 기본지식 사용</span>
+          </label>
         </div>
       </div>
     </div>
@@ -1291,11 +1287,11 @@
   let addonDrawerOpen = false;
   addonDrawerToggle.addEventListener('click', () => {
     addonDrawerOpen = !addonDrawerOpen;
-    // 2026-10-18: "테마 세부설정" 버튼 추가로 항목이 6개가 됨 -- 에이전트단
-    // 패널 폭이 좁아서(실측 약 500px) 한 줄에 다 못 들어가 flex-wrap으로
-    // 2~3줄까지 줄바꿈될 수 있는데, 60px는 1줄만 전제한 값이라 아래쪽 줄이
-    // 잘려서 "버튼이 안 보인다"는 제보가 있었음. 3줄까지 안전하게 보이도록 상향.
-    addonDrawer.style.maxHeight = addonDrawerOpen ? '150px' : '0';
+    // 2026-10-18: "테마 세부설정" 추가 + "자료 추천" 제거로 항목 5개 -- 에이전트단
+    // 패널 폭이 좁아서(실측 약 500px) 한 줄에 다 못 들어가 flex-wrap으로 2줄까지
+    // 줄바꿈될 수 있는데, 60px는 1줄만 전제한 값이라 아래쪽 줄이 잘려서
+    // "버튼이 안 보인다"는 제보가 있었음. 2줄까지 안전하게 보이도록 상향.
+    addonDrawer.style.maxHeight = addonDrawerOpen ? '100px' : '0';
     addonDrawerIcon.textContent = addonDrawerOpen ? '▾' : '▸';
   });
   // 새로고침 버튼으로 이동해온 거면, 이 새 페이지가 아직 필기를 다 불러오기도
