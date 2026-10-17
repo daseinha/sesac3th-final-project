@@ -209,11 +209,112 @@
   #note-body { cursor: var(--cursor-pencil); }
 </style>
 <script>
+  // 커스텀 테마(2026-10-18, [[deferred-color-theme-feature]]) -- 색상 유틸 +
+  // 팔레트 생성/적용 함수. <head>에 두는 이유: 이 아래 FOUC 방지 로직과
+  // body 하단의 테마 관리 UI 스크립트가 둘 다 이 함수들을 써야 하는데,
+  // 전역 함수 선언은 먼저 실행되는 쪽(여기)에 두면 나중 스크립트에서도
+  // 그대로 재사용 가능하다(같은 문서, 순차 실행).
+  function hexToHsl(hex) {
+    const r = parseInt(hex.slice(1, 3), 16) / 255, g = parseInt(hex.slice(3, 5), 16) / 255, b = parseInt(hex.slice(5, 7), 16) / 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    let h, s; const l = (max + min) / 2;
+    if (max === min) { h = s = 0; }
+    else {
+      const d = max - min;
+      s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+      if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+      else if (max === g) h = (b - r) / d + 2;
+      else h = (r - g) / d + 4;
+      h /= 6;
+    }
+    return [h * 360, s, l];
+  }
+  function hslToHex(h, s, l) {
+    h = (((h % 360) + 360) % 360) / 360;
+    function hue2rgb(p, q, t) {
+      if (t < 0) t += 1;
+      if (t > 1) t -= 1;
+      if (t < 1 / 6) return p + (q - p) * 6 * t;
+      if (t < 1 / 2) return q;
+      if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+      return p;
+    }
+    let r, g, b;
+    if (s === 0) { r = g = b = l; }
+    else {
+      const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+      const p = 2 * l - q;
+      r = hue2rgb(p, q, h + 1 / 3);
+      g = hue2rgb(p, q, h);
+      b = hue2rgb(p, q, h - 1 / 3);
+    }
+    const toHex = (x) => Math.round(x * 255).toString(16).padStart(2, '0');
+    return '#' + toHex(r) + toHex(g) + toHex(b);
+  }
+  // 라이트/다크 ":root" 팔레트 중 "브랜드/중립" 계열 토큰만의 JS 사본(커스텀
+  // 테마가 색상을 회전시킬 때 출발점으로 삼음) -- success/danger/feedback-*/
+  // review처럼 의미가 고정된 색(성공=초록, 위험=빨강 등)은 일부러 뺐다, 테마가
+  // 바뀌어도 그 색들은 항상 원래 라이트/다크 값 그대로(위 <style>의 :root 규칙이
+  // 자동으로 담당 -- data-theme 속성만 맞춰주면 됨, 아래서 그렇게 함).
+  const THEME_BASE_PALETTES = {
+    light: {
+      'color-surface': '#FFFFFF', 'color-ink': '#31333F', 'color-text-muted': '#808495',
+      'color-text-secondary': '#595F6E', 'color-border': '#E6E9EF', 'color-border-input': '#D3D3D3',
+      'color-border-dashed': '#C7CBD4', 'color-surface-muted': '#F0F2F6', 'color-surface-subtle': '#F7F8FA',
+      'color-surface-bottom': '#FAFAFC', 'color-icon-disabled': '#ABB1BF', 'color-accent': '#FF4B4B',
+      'color-typing-bg': '#FFFBEB', 'color-badge-bg': '#FFE8CC', 'color-badge-text': '#B75C00',
+      'color-hint-bg': '#FFF4E5', 'color-hint-border': '#FFE0B3', 'color-hint-text': '#6B4A1F',
+      'color-hint-icon': '#FF8700', 'color-ask-bg': '#EFF6FF', 'color-ask-border': '#BFDBFE',
+      'color-ask-text': '#1E3A8A', 'color-ask-accent': '#2563EB', 'color-neutral-300': '#D9DCE3'
+    },
+    dark: {
+      'color-surface': '#1E1F24', 'color-ink': '#E8EAF0', 'color-text-muted': '#9195A6',
+      'color-text-secondary': '#B4B8C4', 'color-border': '#343640', 'color-border-input': '#4A4D59',
+      'color-border-dashed': '#5A5D68', 'color-surface-muted': '#2A2C33', 'color-surface-subtle': '#262830',
+      'color-surface-bottom': '#202127', 'color-icon-disabled': '#6B6E7A', 'color-accent': '#FF6B6B',
+      'color-typing-bg': '#3A341C', 'color-badge-bg': '#4A3419', 'color-badge-text': '#FFA552',
+      'color-hint-bg': '#3D2E1A', 'color-hint-border': '#5C4526', 'color-hint-text': '#E8C79A',
+      'color-hint-icon': '#FF9D2E', 'color-ask-bg': '#1A2638', 'color-ask-border': '#2E4A68',
+      'color-ask-text': '#9CC3F5', 'color-ask-accent': '#82AFFF', 'color-neutral-300': '#42454F'
+    }
+  };
+  // targetHue: 사용자가 고른 "브랜드 색상"(0~359, color-accent가 이 색이 되도록).
+  // 모든 토큰에 같은 각도만큼 더해서(= 원래 토큰끼리 서로 갖던 색상 차이는
+  // 그대로 유지) 명도/채도는 안 건드리므로 기존에 검증된 대비(가독성)가
+  // 그대로 보존된다.
+  function buildCustomPalette(base, targetHue) {
+    const src = THEME_BASE_PALETTES[base] || THEME_BASE_PALETTES.light;
+    const baseHue = hexToHsl(src['color-accent'])[0];
+    const shift = targetHue - baseHue;
+    const out = {};
+    for (const key in src) {
+      const [h, s, l] = hexToHsl(src[key]);
+      out[key] = hslToHex(h + shift, s, l);
+    }
+    return out;
+  }
+  function applyCustomPalette(base, targetHue) {
+    if (base === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+    else document.documentElement.removeAttribute('data-theme');
+    const palette = buildCustomPalette(base, targetHue);
+    for (const key in palette) document.documentElement.style.setProperty('--' + key, palette[key]);
+  }
+  function clearCustomPaletteOverride() {
+    for (const key in THEME_BASE_PALETTES.light) document.documentElement.style.removeProperty('--' + key);
+  }
+
   // 테마 깜빡임(FOUC) 방지 -- body가 그려지기 전에 저장된 선택을 동기적으로
   // 적용한다. 실패해도(localStorage 접근 불가 등) 그냥 기본(라이트)으로 둠.
   try {
     const saved = localStorage.getItem('notemate.theme');
-    if (saved === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+    if (saved === 'dark') {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    } else if (saved === 'custom') {
+      const list = JSON.parse(localStorage.getItem('notemate.customThemes') || '[]');
+      const activeId = localStorage.getItem('notemate.activeCustomThemeId');
+      const t = list.find((x) => x.id === activeId);
+      if (t) applyCustomPalette(t.base, t.hue);
+    }
   } catch (e) {}
 </script>
 </head>
@@ -347,12 +448,42 @@
         <div id="service-status-dot" style="width: 8px; height: 8px; border-radius: 50%; background: var(--color-success); flex-shrink: 0;"></div>
         <span id="service-status-text" style="font-size: 13px; font-weight: 500; color: var(--color-success-text); white-space: nowrap;">세션 진행 중</span>
       </div>
-      <!-- 테마 전환(라이트/다크) 버튼 -- 2026-10-08, [[deferred-color-theme-feature]].
-           커스텀 색은 범위 밖, 지금은 라이트/다크 두 가지만. 선택은 localStorage에
-           저장(뷰어별 UI 설정이라 허용 범위). -->
-      <button id="theme-toggle-btn" title="라이트/다크 테마 전환" style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; background: var(--color-surface-muted); border: none; border-radius: 8px; font-size: 15px; cursor: pointer; flex-shrink: 0;">
-        <span id="theme-toggle-icon">🌙</span>
-      </button>
+      <!-- 테마 전환(라이트/다크/커스텀) -- 2026-10-08에 라이트/다크 토글로 시작,
+           2026-10-18에 커스텀 테마(색상 회전 + 이름 저장) 추가
+           [[deferred-color-theme-feature]]. 과목(노트) 드롭다운과 같은
+           패턴(토글 버튼 + 절대위치 패널). -->
+      <div id="theme-chip" style="position: relative;">
+        <button id="theme-toggle-btn" title="테마 전환" aria-haspopup="listbox" aria-expanded="false" style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; background: var(--color-surface-muted); border: none; border-radius: 8px; font-size: 15px; cursor: pointer; flex-shrink: 0;">
+          <span id="theme-toggle-icon">🌙</span>
+        </button>
+        <div id="theme-menu" role="listbox" style="display: none; position: absolute; top: calc(100% + 6px); right: 0; width: 260px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 10px; box-shadow: var(--shadow-dropdown); padding: 6px; z-index: 40;">
+          <div style="display: flex; gap: 6px; padding: 4px 4px 8px;">
+            <button type="button" id="theme-pick-light" style="flex: 1; border: 1px solid var(--color-border-input); background: var(--color-surface); border-radius: 6px; padding: 6px 0; font-size: 13px; cursor: pointer; color: var(--color-ink);">☀️ 라이트</button>
+            <button type="button" id="theme-pick-dark" style="flex: 1; border: 1px solid var(--color-border-input); background: var(--color-surface); border-radius: 6px; padding: 6px 0; font-size: 13px; cursor: pointer; color: var(--color-ink);">🌙 다크</button>
+          </div>
+          <div style="border-top: 1px solid var(--color-border); margin: 2px 0 6px;"></div>
+          <div id="custom-theme-list"></div>
+          <div id="custom-theme-editor" style="display: none; flex-direction: column; gap: 8px; padding: 8px 4px 2px; border-top: 1px solid var(--color-border); margin-top: 4px;">
+            <div style="display: flex; gap: 6px; align-items: center;">
+              <label for="custom-theme-base" style="font-size: 12px; color: var(--color-text-muted); flex-shrink: 0;">베이스</label>
+              <select id="custom-theme-base" style="flex: 1; font-size: 12.5px; border: 1px solid var(--color-border-input); border-radius: 6px; padding: 4px 6px; background: var(--color-surface); color: var(--color-ink);">
+                <option value="light">라이트</option>
+                <option value="dark">다크</option>
+              </select>
+            </div>
+            <div style="display: flex; gap: 6px; align-items: center;">
+              <input id="custom-theme-hue" type="range" min="0" max="359" value="0" style="flex: 1;">
+              <button type="button" id="custom-theme-random" title="랜덤 색상" style="border: none; background: none; font-size: 16px; cursor: pointer; padding: 0 2px;">🎲</button>
+            </div>
+            <div id="custom-theme-preview" style="height: 28px; border-radius: 6px; border: 1px solid var(--color-border);"></div>
+            <div style="display: flex; gap: 6px;">
+              <input id="custom-theme-name" type="text" placeholder="테마 이름" maxlength="24" style="flex: 1; min-width: 0; border: 1px solid var(--color-border-input); border-radius: 6px; padding: 6px 8px; font-size: 13px; font-family: inherit;">
+              <button type="button" id="custom-theme-save" style="border: 1px solid var(--color-border-input); background: var(--color-surface); border-radius: 6px; padding: 6px 10px; font-size: 13px; cursor: pointer; color: var(--color-ink);">저장</button>
+            </div>
+          </div>
+          <button type="button" id="custom-theme-new-btn" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px; border: none; background: none; color: var(--color-text-secondary); font-size: 13px; padding: 8px 4px 2px; cursor: pointer;">🎨 새 테마 만들기</button>
+        </div>
+      </div>
       <!-- 새 필기 시작 -- 2026-10-08. 언제든 눌러서 지금 이 자리에 새 세션
            구분선을 찍고 세션ID를 새로 발급할 수 있음(이어쓰는 중에도 임의로
            세션을 나눌 수 있어야 한다는 요청). -->
@@ -1116,27 +1247,163 @@
     }
   } catch (e) {}
 
-  // 테마 전환(라이트/다크) -- 2026-10-08, [[deferred-color-theme-feature]].
-  // 실제 적용(CSS 변수 교체)은 <head>의 동기 스크립트가 이미 끝냄(깜빡임 방지).
-  // 여기서는 버튼 아이콘 초기 상태 맞추기 + 클릭 시 토글/저장만 담당.
+  // 테마 전환(라이트/다크/커스텀) -- 2026-10-08 라이트/다크 토글 시작, 2026-10-18
+  // 커스텀 테마(색상 회전 + 이름 저장) 추가 [[deferred-color-theme-feature]].
+  // hexToHsl/hslToHex/THEME_BASE_PALETTES/buildCustomPalette/applyCustomPalette/
+  // clearCustomPaletteOverride는 <head>의 FOUC 방지 스크립트에 이미 정의돼
+  // 있어 여기서 그대로 재사용(전역 함수, 순차 실행이라 먼저 선언됨).
   const themeToggleBtn = document.getElementById('theme-toggle-btn');
   const themeToggleIcon = document.getElementById('theme-toggle-icon');
-  function syncThemeIcon() {
-    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-    themeToggleIcon.textContent = isDark ? '☀️' : '🌙';
-    themeToggleBtn.title = isDark ? '라이트 테마로 전환' : '다크 테마로 전환';
+  const themeMenu = document.getElementById('theme-menu');
+  const customThemeListEl = document.getElementById('custom-theme-list');
+  const customThemeEditor = document.getElementById('custom-theme-editor');
+  const customThemeBaseSel = document.getElementById('custom-theme-base');
+  const customThemeHueInput = document.getElementById('custom-theme-hue');
+  const customThemePreview = document.getElementById('custom-theme-preview');
+  const customThemeNameInput = document.getElementById('custom-theme-name');
+  const CUSTOM_THEMES_KEY = 'notemate.customThemes';
+  const ACTIVE_CUSTOM_THEME_KEY = 'notemate.activeCustomThemeId';
+  let customThemes = [];
+  try { customThemes = JSON.parse(localStorage.getItem(CUSTOM_THEMES_KEY) || '[]'); } catch (e) {}
+
+  function currentThemeMode() {
+    try { return localStorage.getItem('notemate.theme') || 'light'; } catch (e) { return 'light'; }
   }
-  syncThemeIcon();
-  themeToggleBtn.addEventListener('click', () => {
-    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-    if (isDark) {
-      document.documentElement.removeAttribute('data-theme');
-    } else {
-      document.documentElement.setAttribute('data-theme', 'dark');
+  function activeCustomThemeId() {
+    try { return localStorage.getItem(ACTIVE_CUSTOM_THEME_KEY); } catch (e) { return null; }
+  }
+  function syncThemeIcon() {
+    const mode = currentThemeMode();
+    themeToggleIcon.textContent = mode === 'dark' ? '☀️' : (mode === 'custom' ? '🎨' : '🌙');
+  }
+  function openThemeMenu(open) {
+    themeMenu.style.display = open ? 'block' : 'none';
+    themeToggleBtn.setAttribute('aria-expanded', String(open));
+    if (!open) customThemeEditor.style.display = 'none';
+  }
+  // 편집기를 열어둔 채 메뉴 밖을 클릭해서 닫을 때, 저장 안 한 미리보기를
+  // 저장된 실제 테마 상태로 되돌린다(안 그러면 "미리보기만 했는데 화면이
+  // 바뀐 채로 남는" 혼란).
+  function restoreSavedThemeState() {
+    const mode = currentThemeMode();
+    if (mode === 'custom') {
+      const t = customThemes.find((x) => x.id === activeCustomThemeId());
+      if (t) { applyCustomPalette(t.base, t.hue); return; }
     }
-    try { localStorage.setItem('notemate.theme', isDark ? 'light' : 'dark'); } catch (e) {}
+    clearCustomPaletteOverride();
+    if (mode === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+    else document.documentElement.removeAttribute('data-theme');
+  }
+  function saveCustomThemes() {
+    try { localStorage.setItem(CUSTOM_THEMES_KEY, JSON.stringify(customThemes)); } catch (e) {}
+  }
+  function applyBuiltInTheme(mode) {
+    clearCustomPaletteOverride();
+    if (mode === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+    else document.documentElement.removeAttribute('data-theme');
+    try {
+      localStorage.setItem('notemate.theme', mode);
+      localStorage.removeItem(ACTIVE_CUSTOM_THEME_KEY);
+    } catch (e) {}
     syncThemeIcon();
+    renderCustomThemeList();
+    openThemeMenu(false);
+  }
+  function applyAndSaveActiveCustom(id) {
+    const t = customThemes.find((x) => x.id === id);
+    if (!t) return;
+    applyCustomPalette(t.base, t.hue);
+    try {
+      localStorage.setItem('notemate.theme', 'custom');
+      localStorage.setItem(ACTIVE_CUSTOM_THEME_KEY, id);
+    } catch (e) {}
+    syncThemeIcon();
+    renderCustomThemeList();
+    openThemeMenu(false);
+  }
+  function deleteCustomTheme(id) {
+    const wasActive = currentThemeMode() === 'custom' && activeCustomThemeId() === id;
+    customThemes = customThemes.filter((t) => t.id !== id);
+    saveCustomThemes();
+    if (wasActive) applyBuiltInTheme('light');
+    else renderCustomThemeList();
+  }
+  function renderCustomThemeList() {
+    customThemeListEl.innerHTML = '';
+    const activeId = currentThemeMode() === 'custom' ? activeCustomThemeId() : null;
+    customThemes.forEach((t) => {
+      const isCurrent = t.id === activeId;
+      const row = document.createElement('div');
+      row.setAttribute('role', 'option');
+      row.setAttribute('aria-selected', String(isCurrent));
+      row.style.cssText = 'display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 6px; cursor: pointer; font-size: 13.5px; color: var(--color-ink);' + (isCurrent ? ' background: var(--color-surface-muted); font-weight: 600;' : '');
+      row.onmouseenter = () => { if (!isCurrent) row.style.background = 'var(--color-surface-subtle)'; };
+      row.onmouseleave = () => { if (!isCurrent) row.style.background = ''; };
+      const mark = document.createElement('span');
+      mark.textContent = isCurrent ? '✓' : '';
+      mark.style.cssText = 'width: 10px; color: var(--color-success); flex-shrink: 0;';
+      const swatch = document.createElement('span');
+      swatch.style.cssText = 'width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0; border: 1px solid var(--color-border); background: ' + hslToHex(t.hue, 0.65, 0.55) + ';';
+      const label = document.createElement('span');
+      label.textContent = t.name + (t.base === 'dark' ? ' (다크)' : '');
+      label.style.flex = '1';
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.textContent = '×';
+      del.title = '테마 삭제';
+      del.setAttribute('aria-label', `${t.name} 삭제`);
+      del.style.cssText = 'border: none; background: none; color: var(--color-text-muted); font-size: 15px; line-height: 1; cursor: pointer; padding: 0 2px;';
+      del.onclick = (ev) => { ev.stopPropagation(); deleteCustomTheme(t.id); };
+      row.append(mark, swatch, label, del);
+      row.onclick = (ev) => { ev.stopPropagation(); applyAndSaveActiveCustom(t.id); };
+      customThemeListEl.appendChild(row);
+    });
+  }
+  function updateEditorPreview() {
+    const hue = Number(customThemeHueInput.value);
+    customThemePreview.style.background = 'linear-gradient(90deg, ' + hslToHex(hue, 0.65, 0.55) + ', ' + hslToHex((hue + 35) % 360, 0.65, 0.6) + ')';
+  }
+  function previewLive() {
+    applyCustomPalette(customThemeBaseSel.value, Number(customThemeHueInput.value));
+  }
+  function randomizeEditorHue() {
+    customThemeHueInput.value = String(Math.floor(Math.random() * 360));
+    updateEditorPreview();
+    previewLive();
+  }
+  function openNewThemeEditor() {
+    customThemeEditor.style.display = 'flex';
+    customThemeBaseSel.value = 'light';
+    customThemeNameInput.value = '';
+    randomizeEditorHue(); // 처음 열 때 랜덤 색상으로 시작 -- 바로 "마음에 드는지" 볼 수 있게
+  }
+  function saveNewCustomTheme() {
+    const name = customThemeNameInput.value.trim();
+    if (!name) { customThemeNameInput.focus(); return; }
+    const t = { id: 'theme_' + Date.now().toString(36), name, base: customThemeBaseSel.value, hue: Number(customThemeHueInput.value) };
+    customThemes.push(t);
+    saveCustomThemes();
+    customThemeEditor.style.display = 'none';
+    applyAndSaveActiveCustom(t.id);
+  }
+
+  themeToggleBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openThemeMenu(themeMenu.style.display === 'none'); });
+  themeToggleBtn.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); themeToggleBtn.click(); } });
+  themeMenu.addEventListener('click', (ev) => ev.stopPropagation());
+  document.getElementById('theme-pick-light').addEventListener('click', () => applyBuiltInTheme('light'));
+  document.getElementById('theme-pick-dark').addEventListener('click', () => applyBuiltInTheme('dark'));
+  document.getElementById('custom-theme-new-btn').addEventListener('click', openNewThemeEditor);
+  document.getElementById('custom-theme-random').addEventListener('click', randomizeEditorHue);
+  customThemeBaseSel.addEventListener('change', previewLive);
+  customThemeHueInput.addEventListener('input', () => { updateEditorPreview(); previewLive(); });
+  document.getElementById('custom-theme-save').addEventListener('click', saveNewCustomTheme);
+  customThemeNameInput.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); saveNewCustomTheme(); } });
+  document.addEventListener('click', () => {
+    if (customThemeEditor.style.display !== 'none') restoreSavedThemeState();
+    openThemeMenu(false);
   });
+  syncThemeIcon();
+  renderCustomThemeList();
 
   // 필기 종료 -- 2026-10-08, [[deferred-launch-exit-ux]]. submitNote/typingNode/
   // pendingSubmitCount는 아래쪽에서 정의되지만, 이 클릭 핸들러는 사용자가
