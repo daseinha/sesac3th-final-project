@@ -282,6 +282,54 @@
   // 모든 토큰에 같은 각도만큼 더해서(= 원래 토큰끼리 서로 갖던 색상 차이는
   // 그대로 유지) 명도/채도는 안 건드리므로 기존에 검증된 대비(가독성)가
   // 그대로 보존된다.
+  // 대비(명암) 안전장치 (2026-10-18) -- 사용자 지적: "테마 전환으로 배경색이
+  // 바뀔 때 필기입력창/바로물어보기/메뉴버튼 글자가 배경에 묻혀서 안 보이게
+  // 되면 안 된다." HSL의 L(명도)만으로는 안전하지 않음 -- 채도가 높은 색은
+  // 같은 L이어도 색상(hue)에 따라 실제 지각 밝기(상대휘도)가 크게 달라질 수
+  // 있어서, 사용자가 특정 색상을 고르면 글자/배경 쌍의 대비가 약해질 수
+  // 있다(실제 WCAG 상대휘도 공식 기준). 그래서 색상 회전 후, 실제 화면에서
+  // 글자로 쓰이는 토큰 쌍들을 WCAG 대비비 4.5:1 기준으로 검사해서, 모자라면
+  // 그 글자 토큰의 명도만 배경 반대쪽으로 밀어서 맞춘다(배경이나 다른 토큰은
+  // 안 건드림 -- 전체적인 "이 색이 브랜드색이다"라는 느낌은 유지하면서
+  // 가독성만 보장).
+  function relLuminance(hex) {
+    const ch = [hex.slice(1, 3), hex.slice(3, 5), hex.slice(5, 7)].map((h) => {
+      const v = parseInt(h, 16) / 255;
+      return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
+  }
+  function contrastRatio(hexA, hexB) {
+    const La = relLuminance(hexA), Lb = relLuminance(hexB);
+    const lighter = Math.max(La, Lb), darker = Math.min(La, Lb);
+    return (lighter + 0.05) / (darker + 0.05);
+  }
+  // [글자 토큰, 배경 토큰] -- 실제로 화면에서 텍스트/배경으로 짝지어 쓰이는
+  // 조합만(필기입력창·메뉴버튼은 색-surface류, 바로물어보기는 color-ask-*).
+  const THEME_CONTRAST_PAIRS = [
+    ['color-ink', 'color-surface'], ['color-ink', 'color-surface-muted'],
+    ['color-ink', 'color-surface-subtle'], ['color-text-muted', 'color-surface'],
+    ['color-text-secondary', 'color-surface'], ['color-hint-text', 'color-hint-bg'],
+    ['color-ask-text', 'color-ask-bg'], ['color-ask-accent', 'color-surface'],
+    ['color-badge-text', 'color-badge-bg'], ['color-accent', 'color-surface']
+  ];
+  const MIN_TEXT_CONTRAST = 4.5;
+  function fixContrastPairs(palette) {
+    for (const [fgKey, bgKey] of THEME_CONTRAST_PAIRS) {
+      const bgHex = palette[bgKey];
+      const bgL = hexToHsl(bgHex)[2];
+      let [fh, fs, fl] = hexToHsl(palette[fgKey]);
+      let fgHex = palette[fgKey];
+      let guard = 0;
+      while (contrastRatio(fgHex, bgHex) < MIN_TEXT_CONTRAST && guard < 24) {
+        fl = bgL > 0.5 ? Math.max(0, fl - 0.04) : Math.min(1, fl + 0.04);
+        fgHex = hslToHex(fh, fs, fl);
+        guard++;
+      }
+      palette[fgKey] = fgHex;
+    }
+    return palette;
+  }
   function buildCustomPalette(base, targetHue) {
     const src = THEME_BASE_PALETTES[base] || THEME_BASE_PALETTES.light;
     const baseHue = hexToHsl(src['color-accent'])[0];
@@ -291,7 +339,7 @@
       const [h, s, l] = hexToHsl(src[key]);
       out[key] = hslToHex(h + shift, s, l);
     }
-    return out;
+    return fixContrastPairs(out);
   }
   function applyCustomPalette(base, targetHue) {
     if (base === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
@@ -387,7 +435,7 @@
           <div id="course-list"></div>
           <div style="border-top: 1px solid var(--color-border); margin: 6px 0 4px;"></div>
           <div style="display: flex; gap: 6px; padding: 4px;">
-            <input id="course-new-name" type="text" placeholder="새 노트 이름" maxlength="40" style="flex: 1; min-width: 0; border: 1px solid var(--color-border-input); border-radius: 6px; padding: 6px 8px; font-size: 13px; font-family: inherit;">
+            <input id="course-new-name" type="text" placeholder="새 노트 이름" maxlength="40" style="flex: 1; min-width: 0; border: 1px solid var(--color-border-input); border-radius: 6px; padding: 6px 8px; font-size: 13px; font-family: inherit; color: var(--color-ink); background: var(--color-surface);">
             <button id="course-add-btn" type="button" style="border: 1px solid var(--color-border-input); background: var(--color-surface); border-radius: 6px; padding: 6px 10px; font-size: 13px; cursor: pointer; color: var(--color-ink);">추가</button>
           </div>
         </div>
@@ -434,7 +482,7 @@
             <div id="upload-label-list"></div>
             <div style="border-top: 1px solid var(--color-border); margin: 6px 0 4px;"></div>
             <div style="display: flex; gap: 6px; padding: 4px;">
-              <input id="upload-label-new-name" type="text" placeholder="새 분류명" maxlength="40" style="flex: 1; min-width: 0; border: 1px solid var(--color-border-input); border-radius: 6px; padding: 6px 8px; font-size: 13px; font-family: inherit;">
+              <input id="upload-label-new-name" type="text" placeholder="새 분류명" maxlength="40" style="flex: 1; min-width: 0; border: 1px solid var(--color-border-input); border-radius: 6px; padding: 6px 8px; font-size: 13px; font-family: inherit; color: var(--color-ink); background: var(--color-surface);">
               <button id="upload-label-add-btn" type="button" style="border: 1px solid var(--color-border-input); background: var(--color-surface); border-radius: 6px; padding: 6px 10px; font-size: 13px; cursor: pointer; color: var(--color-ink);">추가</button>
             </div>
           </div>
@@ -448,42 +496,13 @@
         <div id="service-status-dot" style="width: 8px; height: 8px; border-radius: 50%; background: var(--color-success); flex-shrink: 0;"></div>
         <span id="service-status-text" style="font-size: 13px; font-weight: 500; color: var(--color-success-text); white-space: nowrap;">세션 진행 중</span>
       </div>
-      <!-- 테마 전환(라이트/다크/커스텀) -- 2026-10-08에 라이트/다크 토글로 시작,
-           2026-10-18에 커스텀 테마(색상 회전 + 이름 저장) 추가
-           [[deferred-color-theme-feature]]. 과목(노트) 드롭다운과 같은
-           패턴(토글 버튼 + 절대위치 패널). -->
-      <div id="theme-chip" style="position: relative;">
-        <button id="theme-toggle-btn" title="테마 전환" aria-haspopup="listbox" aria-expanded="false" style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; background: var(--color-surface-muted); border: none; border-radius: 8px; font-size: 15px; cursor: pointer; flex-shrink: 0;">
-          <span id="theme-toggle-icon">🌙</span>
-        </button>
-        <div id="theme-menu" role="listbox" style="display: none; position: absolute; top: calc(100% + 6px); right: 0; width: 260px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 10px; box-shadow: var(--shadow-dropdown); padding: 6px; z-index: 40;">
-          <div style="display: flex; gap: 6px; padding: 4px 4px 8px;">
-            <button type="button" id="theme-pick-light" style="flex: 1; border: 1px solid var(--color-border-input); background: var(--color-surface); border-radius: 6px; padding: 6px 0; font-size: 13px; cursor: pointer; color: var(--color-ink);">☀️ 라이트</button>
-            <button type="button" id="theme-pick-dark" style="flex: 1; border: 1px solid var(--color-border-input); background: var(--color-surface); border-radius: 6px; padding: 6px 0; font-size: 13px; cursor: pointer; color: var(--color-ink);">🌙 다크</button>
-          </div>
-          <div style="border-top: 1px solid var(--color-border); margin: 2px 0 6px;"></div>
-          <div id="custom-theme-list"></div>
-          <div id="custom-theme-editor" style="display: none; flex-direction: column; gap: 8px; padding: 8px 4px 2px; border-top: 1px solid var(--color-border); margin-top: 4px;">
-            <div style="display: flex; gap: 6px; align-items: center;">
-              <label for="custom-theme-base" style="font-size: 12px; color: var(--color-text-muted); flex-shrink: 0;">베이스</label>
-              <select id="custom-theme-base" style="flex: 1; font-size: 12.5px; border: 1px solid var(--color-border-input); border-radius: 6px; padding: 4px 6px; background: var(--color-surface); color: var(--color-ink);">
-                <option value="light">라이트</option>
-                <option value="dark">다크</option>
-              </select>
-            </div>
-            <div style="display: flex; gap: 6px; align-items: center;">
-              <input id="custom-theme-hue" type="range" min="0" max="359" value="0" style="flex: 1;">
-              <button type="button" id="custom-theme-random" title="랜덤 색상" style="border: none; background: none; font-size: 16px; cursor: pointer; padding: 0 2px;">🎲</button>
-            </div>
-            <div id="custom-theme-preview" style="height: 28px; border-radius: 6px; border: 1px solid var(--color-border);"></div>
-            <div style="display: flex; gap: 6px;">
-              <input id="custom-theme-name" type="text" placeholder="테마 이름" maxlength="24" style="flex: 1; min-width: 0; border: 1px solid var(--color-border-input); border-radius: 6px; padding: 6px 8px; font-size: 13px; font-family: inherit;">
-              <button type="button" id="custom-theme-save" style="border: 1px solid var(--color-border-input); background: var(--color-surface); border-radius: 6px; padding: 6px 10px; font-size: 13px; cursor: pointer; color: var(--color-ink);">저장</button>
-            </div>
-          </div>
-          <button type="button" id="custom-theme-new-btn" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px; border: none; background: none; color: var(--color-text-secondary); font-size: 13px; padding: 8px 4px 2px; cursor: pointer;">🎨 새 테마 만들기</button>
-        </div>
-      </div>
+      <!-- 테마 전환(라이트/다크) -- 2026-10-08 도입, 2026-10-18 커스텀 테마 추가했다가
+           사용자 피드백으로 다시 단순 클릭토글로 되돌림("기존 클릭만으로 라이트/다크
+           오가는 방식이 편했다") -- 커스텀 테마 세부설정은 애드온 서랍 쪽으로 이동
+           (아래 #theme-settings-chip 참고) [[deferred-color-theme-feature]]. -->
+      <button id="theme-toggle-btn" title="라이트/다크 전환" style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; background: var(--color-surface-muted); border: none; border-radius: 8px; font-size: 15px; cursor: pointer; flex-shrink: 0;">
+        <span id="theme-toggle-icon">🌙</span>
+      </button>
       <!-- 새 필기 시작 -- 2026-10-08. 언제든 눌러서 지금 이 자리에 새 세션
            구분선을 찍고 세션ID를 새로 발급할 수 있음(이어쓰는 중에도 임의로
            세션을 나눌 수 있어야 한다는 요청). -->
@@ -525,9 +544,9 @@
         <input type="radio" name="export-scope" value="range"> 기간 선택
       </label>
       <div id="export-range-fields" style="display: none; margin: 4px 0 10px 22px; gap: 8px; align-items: center;">
-        <input id="export-start-date" type="date" style="border: 1px solid var(--color-border-input); border-radius: 6px; padding: 5px 7px; font-size: 13px; font-family: inherit;">
+        <input id="export-start-date" type="date" style="border: 1px solid var(--color-border-input); border-radius: 6px; padding: 5px 7px; font-size: 13px; font-family: inherit; color: var(--color-ink); background: var(--color-surface);">
         <span style="color: var(--color-text-muted); font-size: 12.5px;">~</span>
-        <input id="export-end-date" type="date" style="border: 1px solid var(--color-border-input); border-radius: 6px; padding: 5px 7px; font-size: 13px; font-family: inherit;">
+        <input id="export-end-date" type="date" style="border: 1px solid var(--color-border-input); border-radius: 6px; padding: 5px 7px; font-size: 13px; font-family: inherit; color: var(--color-ink); background: var(--color-surface);">
       </div>
       <div id="export-range-note" style="display: none; margin: -2px 0 10px 22px; font-size: 11.5px; color: var(--color-text-muted); line-height: 1.5;">
         작성 시각(실제 DB 저장 시각) 기준입니다 -- 재생 테스트로 한꺼번에
@@ -632,7 +651,7 @@
         <div id="ask-answer" style="display: none; background: var(--color-hint-bg); border: 1px solid var(--color-hint-border); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; font-size: 13px; line-height: 1.5; color: var(--color-hint-text);"></div>
         <div style="display: flex; align-items: center; gap: 8px; background: var(--color-surface); border: 1px solid var(--color-border-input); border-radius: 999px; padding: 8px 14px;">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-muted)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input id="ask-input" type="text" placeholder="지금 바로 물어보기..." style="flex-grow: 1; border: none; outline: none; font-size: 13.5px; font-family: inherit; background: none;">
+          <input id="ask-input" type="text" placeholder="지금 바로 물어보기..." style="flex-grow: 1; border: none; outline: none; font-size: 13.5px; font-family: inherit; background: none; color: var(--color-ink);">
         </div>
       </div>
 
@@ -761,6 +780,46 @@
             <input type="checkbox" id="general-knowledge-toggle" checked style="width: 14px; height: 14px; cursor: pointer; accent-color: var(--color-hint-icon); margin: 0;">
             <span style="font-size: 12px; font-weight: 700; color: var(--color-hint-icon);">LLM 기본지식 사용</span>
           </label>
+          <!-- 테마 세부설정(라이트/다크/커스텀) -- 2026-10-18, 평소엔 안 보이다가
+               필요할 때만 꺼내 쓰라는 사용자 요청으로 애드온 서랍 쪽으로 이동.
+               메뉴 내용·구성(라이트/다크 빠른전환 + 커스텀 테마 목록 + 새 테마
+               만들기)은 기존 그대로, 여는 버튼과 위치만 바뀜(위로 펼쳐짐 --
+               서랍이 화면 하단이라 아래로 펼치면 화면 밖으로 나감). -->
+          <div id="theme-settings-chip" style="position: relative; padding-left: 12px; border-left: 1px solid var(--color-border-input);">
+            <button type="button" id="theme-settings-btn" aria-haspopup="listbox" aria-expanded="false" style="display: flex; align-items: center; gap: 4px; background: none; border: 1px solid var(--color-border-input); border-radius: 999px; padding: 3px 10px; font-size: 11px; color: var(--color-text-muted); cursor: pointer;">
+              🎨 테마 세부설정
+            </button>
+            <!-- position:fixed(JS가 열 때마다 버튼 위치 기준으로 top/left 재계산) --
+                 이 패널의 부모(#addon-drawer)가 overflow:hidden(높이 고정 서랍)이라,
+                 position:absolute로 두면 패널이 서랍 높이에 잘려서 안 보인다. -->
+            <div id="theme-menu" role="listbox" style="display: none; position: fixed; width: 260px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 10px; box-shadow: var(--shadow-dropdown); padding: 6px; z-index: 60;">
+              <div style="display: flex; gap: 6px; padding: 4px 4px 8px;">
+                <button type="button" id="theme-pick-light" style="flex: 1; border: 1px solid var(--color-border-input); background: var(--color-surface); border-radius: 6px; padding: 6px 0; font-size: 13px; cursor: pointer; color: var(--color-ink);">☀️ 라이트</button>
+                <button type="button" id="theme-pick-dark" style="flex: 1; border: 1px solid var(--color-border-input); background: var(--color-surface); border-radius: 6px; padding: 6px 0; font-size: 13px; cursor: pointer; color: var(--color-ink);">🌙 다크</button>
+              </div>
+              <div style="border-top: 1px solid var(--color-border); margin: 2px 0 6px;"></div>
+              <div id="custom-theme-list"></div>
+              <div id="custom-theme-editor" style="display: none; flex-direction: column; gap: 8px; padding: 8px 4px 2px; border-top: 1px solid var(--color-border); margin-top: 4px;">
+                <div style="display: flex; gap: 6px; align-items: center;">
+                  <label for="custom-theme-base" style="font-size: 12px; color: var(--color-text-muted); flex-shrink: 0;">베이스</label>
+                  <select id="custom-theme-base" style="flex: 1; font-size: 12.5px; border: 1px solid var(--color-border-input); border-radius: 6px; padding: 4px 6px; background: var(--color-surface); color: var(--color-ink);">
+                    <option value="light">라이트</option>
+                    <option value="dark">다크</option>
+                  </select>
+                </div>
+                <div style="display: flex; gap: 6px; align-items: center;">
+                  <input id="custom-theme-hue" type="range" min="0" max="359" value="0" style="flex: 1;">
+                  <button type="button" id="custom-theme-random" title="랜덤 색상" style="border: none; background: none; font-size: 16px; cursor: pointer; padding: 0 2px;">🎲</button>
+                </div>
+                <div id="custom-theme-preview" style="height: 28px; border-radius: 6px; border: 1px solid var(--color-border);"></div>
+                <div style="display: flex; gap: 6px;">
+                  <input id="custom-theme-name" type="text" placeholder="테마 이름" maxlength="24" style="flex: 1; min-width: 0; border: 1px solid var(--color-border-input); border-radius: 6px; padding: 6px 8px; font-size: 13px; font-family: inherit; color: var(--color-ink); background: var(--color-surface);">
+                  <button type="button" id="custom-theme-save" style="border: 1px solid var(--color-border-input); background: var(--color-surface); border-radius: 6px; padding: 6px 10px; font-size: 13px; cursor: pointer; color: var(--color-ink);">저장</button>
+                </div>
+              </div>
+              <button type="button" id="custom-theme-new-btn" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px; border: none; background: none; color: var(--color-text-secondary); font-size: 13px; padding: 8px 4px 2px; cursor: pointer;">🎨 새 테마 만들기</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1248,12 +1307,16 @@
   } catch (e) {}
 
   // 테마 전환(라이트/다크/커스텀) -- 2026-10-08 라이트/다크 토글 시작, 2026-10-18
-  // 커스텀 테마(색상 회전 + 이름 저장) 추가 [[deferred-color-theme-feature]].
+  // 커스텀 테마(색상 회전 + 이름 저장) 추가했다가, 같은 날 사용자 피드백으로
+  // 재분리: 상단바 버튼은 다시 "클릭 한 번 = 라이트/다크 전환"인 단순 토글로
+  // 되돌리고, 커스텀 테마 세부설정(드롭다운 패널)은 애드온 서랍의
+  // `#theme-settings-btn`으로 옮김 [[deferred-color-theme-feature]].
   // hexToHsl/hslToHex/THEME_BASE_PALETTES/buildCustomPalette/applyCustomPalette/
   // clearCustomPaletteOverride는 <head>의 FOUC 방지 스크립트에 이미 정의돼
   // 있어 여기서 그대로 재사용(전역 함수, 순차 실행이라 먼저 선언됨).
   const themeToggleBtn = document.getElementById('theme-toggle-btn');
   const themeToggleIcon = document.getElementById('theme-toggle-icon');
+  const themeSettingsBtn = document.getElementById('theme-settings-btn');
   const themeMenu = document.getElementById('theme-menu');
   const customThemeListEl = document.getElementById('custom-theme-list');
   const customThemeEditor = document.getElementById('custom-theme-editor');
@@ -1272,13 +1335,34 @@
   function activeCustomThemeId() {
     try { return localStorage.getItem(ACTIVE_CUSTOM_THEME_KEY); } catch (e) { return null; }
   }
-  function syncThemeIcon() {
+  // 상단바 버튼은 "지금 보이는 게 밝은지 어두운지"만 보고 그 반대로 뒤집는
+  // 단순 토글이다(커스텀 테마 중이어도 그 테마의 베이스가 라이트/다크 중
+  // 뭔지로 판단) -- 2026-10-18 사용자 피드백: "클릭 한 번으로 라이트/다크
+  // 오가는 기존 방식이 편했다, 커스텀 때문에 창이 뜨는 게 어색하다."
+  function isVisuallyDark() {
     const mode = currentThemeMode();
-    themeToggleIcon.textContent = mode === 'dark' ? '☀️' : (mode === 'custom' ? '🎨' : '🌙');
+    if (mode === 'dark') return true;
+    if (mode === 'custom') {
+      const t = customThemes.find((x) => x.id === activeCustomThemeId());
+      return !!(t && t.base === 'dark');
+    }
+    return false;
+  }
+  function syncThemeIcon() {
+    themeToggleIcon.textContent = isVisuallyDark() ? '☀️' : '🌙';
   }
   function openThemeMenu(open) {
+    if (open) {
+      // position:fixed라 매번 열 때 버튼 위치 기준으로 다시 계산한다(서랍
+      // overflow:hidden에 안 잘리게 하려고 fixed로 바꾼 것 -- 위 HTML 주석 참고).
+      const r = themeSettingsBtn.getBoundingClientRect();
+      themeMenu.style.right = Math.max(8, window.innerWidth - r.right) + 'px';
+      themeMenu.style.bottom = Math.max(8, window.innerHeight - r.top + 6) + 'px';
+      themeMenu.style.left = 'auto';
+      themeMenu.style.top = 'auto';
+    }
     themeMenu.style.display = open ? 'block' : 'none';
-    themeToggleBtn.setAttribute('aria-expanded', String(open));
+    themeSettingsBtn.setAttribute('aria-expanded', String(open));
     if (!open) customThemeEditor.style.display = 'none';
   }
   // 편집기를 열어둔 채 메뉴 밖을 클릭해서 닫을 때, 저장 안 한 미리보기를
@@ -1387,8 +1471,13 @@
     applyAndSaveActiveCustom(t.id);
   }
 
-  themeToggleBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openThemeMenu(themeMenu.style.display === 'none'); });
-  themeToggleBtn.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); themeToggleBtn.click(); } });
+  // 상단바 버튼 -- 단순 라이트/다크 클릭 토글(커스텀 테마와 무관하게 항상
+  // "지금 밝으면 다크로, 어두우면 라이트로"만 수행). 드롭다운을 열지 않는다.
+  themeToggleBtn.addEventListener('click', () => applyBuiltInTheme(isVisuallyDark() ? 'light' : 'dark'));
+  // 애드온 서랍의 "테마 세부설정" 버튼 -- 기존 드롭다운 패널(라이트/다크/커스텀
+  // 전부 설정 가능)을 그대로 열고 닫는다. 과목(노트) 드롭다운과 같은 패턴.
+  themeSettingsBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openThemeMenu(themeMenu.style.display === 'none'); });
+  themeSettingsBtn.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); themeSettingsBtn.click(); } });
   themeMenu.addEventListener('click', (ev) => ev.stopPropagation());
   document.getElementById('theme-pick-light').addEventListener('click', () => applyBuiltInTheme('light'));
   document.getElementById('theme-pick-dark').addEventListener('click', () => applyBuiltInTheme('dark'));
