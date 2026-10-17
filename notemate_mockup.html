@@ -1291,7 +1291,11 @@
   let addonDrawerOpen = false;
   addonDrawerToggle.addEventListener('click', () => {
     addonDrawerOpen = !addonDrawerOpen;
-    addonDrawer.style.maxHeight = addonDrawerOpen ? '60px' : '0';
+    // 2026-10-18: "테마 세부설정" 버튼 추가로 항목이 6개가 됨 -- 에이전트단
+    // 패널 폭이 좁아서(실측 약 500px) 한 줄에 다 못 들어가 flex-wrap으로
+    // 2~3줄까지 줄바꿈될 수 있는데, 60px는 1줄만 전제한 값이라 아래쪽 줄이
+    // 잘려서 "버튼이 안 보인다"는 제보가 있었음. 3줄까지 안전하게 보이도록 상향.
+    addonDrawer.style.maxHeight = addonDrawerOpen ? '150px' : '0';
     addonDrawerIcon.textContent = addonDrawerOpen ? '▾' : '▸';
   });
   // 새로고침 버튼으로 이동해온 거면, 이 새 페이지가 아직 필기를 다 불러오기도
